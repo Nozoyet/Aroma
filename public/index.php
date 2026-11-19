@@ -255,6 +255,7 @@ function lista_compacta(array $rs): void
   .compacta li { padding: 10px 0; border-top: 1px solid rgba(166,95,25,.35); }
   .compacta p { margin: 2px 0 0; color: var(--sec); }
   .vacio { color: var(--sec); }
+  .vencen { margin: 0 0 14px; font-size: .95rem; } .vencen strong { color: var(--titulo); }
   @media (max-width: 600px) { main { padding: 24px 14px 60px; } h1 { font-size: 1.7rem; } }
 </style>
 </head>
@@ -374,6 +375,37 @@ function lista_compacta(array $rs): void
     <?php endif; ?>
   </div>
 
+  <?php if ($resultado['plan_dias'] !== []): ?>
+    <?php foreach ($resultado['plan_dias'] as $d):
+        $f = new DateTimeImmutable($d['fecha']);
+        $finde = in_array($d['tipo_dia'], ['fin_de_semana', 'feriado'], true); ?>
+      <h2>Día <?= e($d['dia']) ?> · <?= e($d['etiqueta']) ?> · <?= e(DIAS_ES[(int)$f->format('N')] . ' ' . $f->format('d/m')) ?>
+        · <?= e(strtolower(TXT_TIPO_DIA[$d['tipo_dia']] ?? $d['tipo_dia'])) ?><?= $finde ? ' (se vende más)' : '' ?></h2>
+
+      <?php if ($d['vencen'] !== []): ?>
+        <p class="vencen sec">Vencen <?= $d['dia'] === 1 ? 'hoy o ya vencidos' : e(strtolower($d['etiqueta'])) ?>:
+          <?php foreach ($d['vencen'] as $k => $v): ?>
+            <?= $k > 0 ? ' · ' : '' ?><strong><?= e($v['insumo']) ?></strong> (<?= e(Explicador::peso($v['gramos'])) ?><?= $v['vencido'] ? ', vencido' : '' ?>) → <?= e($v['estado']) ?>
+          <?php endforeach; ?>
+        </p>
+      <?php endif; ?>
+
+      <?php foreach ($d['bloques'] as $b) { tarjeta($b, $b['accion'] === 'menu_emergencia'); } ?>
+      <?php if ($d['bloques'] === []): ?>
+        <p class="vacio">Sin acciones nuevas este día: seguir con las ventas normales.</p>
+      <?php endif; ?>
+      <?php if ($d['ventas'] !== []): ?>
+        <details class="opcional">
+          <summary><strong>Ventas esperadas</strong> · promedio de los últimos meses para este día de la semana</summary>
+          <ul class="compacta">
+            <?php foreach ($d['ventas'] as $v): ?>
+              <li><strong><?= e($v['porciones']) ?></strong> <span class="sec">porciones de</span> <?= e($v['plato']) ?></li>
+            <?php endforeach; ?>
+          </ul>
+        </details>
+      <?php endif; ?>
+    <?php endforeach; ?>
+  <?php else: ?>
   <?php if ($emergencia !== []): ?>
     <h2>Menú de emergencia · ingredientes que vencen hoy</h2>
     <?php foreach ($emergencia as $r) { tarjeta($r, true); } ?>
@@ -387,6 +419,8 @@ function lista_compacta(array $rs): void
   <?php if ($emergencia === [] && $otras === []): ?>
     <h2>Resultado</h2>
     <p class="vacio">No hay nada urgente: ningún lote necesita menú de emergencia, promoción, compra o descarte.</p>
+  <?php endif; ?>
+
   <?php endif; ?>
 
   <?php if ($mantener !== [] || $revisar !== []): ?>

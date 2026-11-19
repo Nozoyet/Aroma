@@ -113,6 +113,17 @@ final class Sistema
             $stockTotal[$insumoId] = $c['stock_total_g'];
         }
 
+        // Ventas esperadas de cada día del horizonte (módulo de demanda), de mayor a menor
+        $ventas = [];
+        foreach ($fechas as $i => $fecha) {
+            $fila = [];
+            foreach ($grafo->platos() as $platoId => $nombre) {
+                $fila[] = ['plato' => $nombre, 'porciones' => (int)round($demanda->estimar($platoId, $fecha)['porciones'])];
+            }
+            usort($fila, static fn(array $a, array $b): int => $b['porciones'] <=> $a['porciones']);
+            $ventas[$i + 1] = $fila;
+        }
+
         $motor = new MotorReglas($reglas, $par);
         $expl  = new Explicador($reglas, $grafo);
         $dfs   = new Dfs($grafo);
@@ -158,7 +169,9 @@ final class Sistema
             $tecnico   = $expl->lote($lote, $inf);   // detalle técnico (reglas disparadas), opcional en pantalla
             $items     = [];   // lo que se muestra: ['cantidad', 'nombre', 'nota']
             $metricas  = [];   // cifras clave: ['etiqueta', 'valor']
-            $motivo    = [];   // justificación en lenguaje sencillo
+            $motivo    = [];   // justificación en lenguaje sencillo (todas las acciones del lote)
+            $motivos   = [];   // ... separada por acción, para el plan por días
+            $metricasPorAccion = [];
             $registros = [];   // filas para la tabla decision
             $alertas   = $inf['alertas'];
             $principal = $inf['accion_principal'];
@@ -170,18 +183,20 @@ final class Sistema
                 $motivo = $expl->motivoMenu($lote, $r, $stockTotal);
                 foreach ($r['menu'] as $platoId => $k) {
                     $items[] = ['cantidad' => $k . ($k === 1 ? ' porción' : ' porciones'),
-                                'nombre' => $grafo->nombrePlato($platoId), 'nota' => ''];
+                                'nombre' => $grafo->nombrePlato($platoId), 'nota' => '', 'dia' => 1, 'accion' => 'menu_emergencia'];
                     $registros[] = ['accion' => 'menu_emergencia', 'fc' => $inf['fc_principal'], 'plato_id' => $platoId,
-                        'porciones' => $k, 'ahorro' => $k * $grafo->gramos($platoId, $insumoId) * $costoG];
+                        'dia_plan' => 1, 'porciones' => $k, 'ahorro' => $k * $grafo->gramos($platoId, $insumoId) * $costoG];
                 }
                 if ($r['menu'] === []) {
-                    $registros[] = ['accion' => 'menu_emergencia', 'fc' => $inf['fc_principal'], 'costo' => $r['valor_lote']];
+                    $registros[] = ['accion' => 'menu_emergencia', 'fc' => $inf['fc_principal'], 'dia_plan' => 1, 'costo' => $r['valor_lote']];
                 }
                 $metricas = [
                     ['etiqueta' => 'Se aprovecha', 'valor' => round($r['porcentaje'] * 100) . ' % del lote'],
                     ['etiqueta' => 'Valor rescatado', 'valor' => Explicador::bs($r['valor_rescatado'])],
                     ['etiqueta' => 'Sobrante', 'valor' => Explicador::peso($r['gramos_sobrante'])],
                 ];
+                $motivos['menu_emergencia'] = $motivo;
+                $metricasPorAccion['menu_emergencia'] = $metricas;
             } elseif ($principal === 'promocionar') {
                 $base = [];
                 for ($d = 0; $d < $dias; $d++) {
@@ -198,7 +213,8 @@ final class Sistema
                 foreach ($r['plan'] as $p) {
                     $items[] = ['cantidad' => $p['porciones'] . ($p['porciones'] === 1 ? ' porción' : ' porciones'),
                                 'nombre' => $grafo->nombrePlato($p['plato_id']),
-                                'nota' => Explicador::diaTxt($p['dia']) . ' · ' . round($descuento * 100) . ' % de descuento'];
+                                'nota' => Explicador::diaTxt($p['dia']) . ' · ' . round($descuento * 100) . ' % de descuento',
+                                'dia' => $p['dia'], 'accion' => 'promocionar'];
                     $registros[] = ['accion' => 'promocionar', 'fc' => $inf['fc_principal'], 'plato_id' => $p['plato_id'],
                         'dia_plan' => $p['dia'], 'porciones' => $p['porciones'], 'costo' => $p['descuento'],
                         'ahorro' => $p['gramos'] * $costoG - $p['descuento']];
@@ -212,12 +228,15 @@ final class Sistema
                         ['etiqueta' => 'Con la promoción cuesta', 'valor' => Explicador::bs($r['costo_total'])],
                         ['etiqueta' => 'Ahorro', 'valor' => Explicador::bs($r['ahorro'])],
                     ];
+                    $motivos['promocionar'] = $motivo;
+                    $metricasPorAccion['promocionar'] = $metricas;
                 }
             } elseif ($principal === 'descartar') {
                 $motivo = $expl->motivoDescarte($lote, $inf);
                 $items[] = ['cantidad' => 'Descartar el lote', 'nombre' => $lote['insumo'],
-                            'nota' => 'pérdida de ' . Explicador::bs($lote['valor_lote'])];
-                $registros[] = ['accion' => 'descartar', 'fc' => $inf['fc_principal'], 'costo' => $lote['valor_lote']];
+                            'nota' => 'pérdida de ' . Explicador::bs($lote['valor_lote']), 'dia' => 1, 'accion' => 'descartar'];
+                $registros[] = ['accion' => 'descartar', 'fc' => $inf['fc_principal'], 'dia_plan' => 1, 'costo' => $lote['valor_lote']];
+                $motivos['descartar'] = $motivo;
             } elseif ($principal === 'mantener') {
                 $motivo = $expl->motivoMantener($lote);
                 $registros[] = ['accion' => 'mantener', 'fc' => $inf['fc_principal']];
@@ -235,9 +254,12 @@ final class Sistema
                     if ($gramos > 0) {
                         $comprasHechas[$insumoId] = true;
                         array_push($tecnico, ...$expl->compra($gramos, $c['stock_total_g'], $c['consumo_diario_g'], $objetivo));
-                        array_push($motivo, ...$expl->motivoCompra($lote, $inf, $gramos, $c, $objetivo));
-                        $items[] = ['cantidad' => 'Comprar ≈ ' . Explicador::peso($gramos), 'nombre' => $lote['insumo'], 'nota' => ''];
-                        $registros[] = ['accion' => 'comprar', 'fc' => $inf['acciones']['comprar'], 'costo' => $gramos * $costoG];
+                        $motivoCompra = $expl->motivoCompra($lote, $inf, $gramos, $c, $objetivo);
+                        array_push($motivo, ...$motivoCompra);
+                        $motivos['comprar'] = $motivoCompra;
+                        $items[] = ['cantidad' => 'Comprar ≈ ' . Explicador::peso($gramos), 'nombre' => $lote['insumo'], 'nota' => '',
+                                    'dia' => 1, 'accion' => 'comprar'];
+                        $registros[] = ['accion' => 'comprar', 'fc' => $inf['acciones']['comprar'], 'dia_plan' => 1, 'costo' => $gramos * $costoG];
                         $principal ??= 'comprar';
                     }
                 }
@@ -261,7 +283,10 @@ final class Sistema
                 'confianza'  => $principal === null ? null : Explicador::confianza($inf['fc_principal']),
                 'items'      => $items,
                 'metricas'   => $metricas,
+                'metricas_por_accion' => $metricasPorAccion,
+                'fc_por_accion' => $inf['acciones'],
                 'motivo'     => $motivo,
+                'motivos'    => $motivos,
                 'alertas'    => $alertas,
                 'tecnico'    => $tecnico,
                 'decisiones' => $ids,
@@ -275,7 +300,72 @@ final class Sistema
             'tipo'        => $tipo,
             'tipos_dia'   => $tipos,
             'resultados'  => $resultados,
+            'plan_dias'   => $tipo === 'plan_3_dias' ? self::armarPlanDias($resultados, $tipos, $ventas) : [],
             'ahorro_total' => round(array_sum(array_column($resultados, 'ahorro')), 2),
         ];
+    }
+
+    /**
+     * Reordena las decisiones por día para el "plan de 3 días".
+     * Cada día trae: los lotes que vencen ese día y los bloques de acción (cada bloque tiene la forma
+     * de un resultado por lote, así la vista los dibuja igual). Los lotes ya vencidos se listan en el día 1.
+     * El menú de emergencia, los descartes y las compras van en el día 1; las promociones, en el día que eligió A*.
+     *
+     * @param array $resultados resultados por lote de procesar()
+     * @param array $tipos      Repositorio::tiposDia(): fecha y tipo de día de cada día del horizonte
+     * @param array $ventas     [día => [['plato', 'porciones'], ...]] ventas esperadas de cada día
+     */
+    public static function armarPlanDias(array $resultados, array $tipos, array $ventas = []): array
+    {
+        $etiquetas = ['Hoy', 'Mañana', 'Pasado mañana'];
+        $orden = ['menu_emergencia' => 0, 'descartar' => 1, 'promocionar' => 2, 'comprar' => 3];
+        $estado = ['menu_emergencia' => 'menú de emergencia', 'descartar' => 'se descarta', 'promocionar' => 'se promociona',
+                   'comprar' => 'se repone con una compra', 'mantener' => 'no requiere acción'];
+
+        $dias = [];
+        foreach ($tipos as $i => $t) {
+            $dias[$i + 1] = ['dia' => $i + 1, 'fecha' => $t['fecha'], 'etiqueta' => $etiquetas[$i] ?? 'Día ' . ($i + 1),
+                             'tipo_dia' => $t['tipo_dia'], 'vencen' => [], 'bloques' => [], 'ventas' => $ventas[$i + 1] ?? []];
+        }
+
+        foreach ($resultados as $r) {
+            $l = $r['lote'];
+
+            $diaVence = max(0, $l['dias_vida']) + 1;
+            if (isset($dias[$diaVence])) {
+                $dias[$diaVence]['vencen'][] = [
+                    'insumo' => $l['insumo'], 'gramos' => $l['stock_actual'], 'vencido' => $l['dias_vida'] < 0,
+                    'estado' => $estado[$r['accion'] ?? ''] ?? 'revisar a mano',
+                ];
+            }
+
+            $porClave = [];
+            foreach ($r['items'] as $it) {
+                $porClave[$it['dia'] . '|' . $it['accion']][] = $it;
+            }
+            foreach ($porClave as $clave => $items) {
+                [$dia, $accion] = explode('|', $clave);
+                if (!isset($dias[(int)$dia])) {
+                    continue;
+                }
+                $dias[(int)$dia]['bloques'][] = [
+                    'lote'      => $l,
+                    'accion'    => $accion,
+                    'items'     => $items,
+                    'metricas'  => $r['metricas_por_accion'][$accion] ?? [],
+                    'motivo'    => $r['motivos'][$accion] ?? $r['motivo'],
+                    'alertas'   => $accion === $r['accion'] ? $r['alertas'] : [],
+                    'confianza' => Explicador::confianza((float)($r['fc_por_accion'][$accion] ?? $r['fc'])),
+                    'tecnico'   => $r['tecnico'],
+                ];
+            }
+        }
+
+        foreach ($dias as &$d) {
+            usort($d['bloques'], static fn(array $a, array $b): int =>
+                [$orden[$a['accion']], $a['lote']['insumo']] <=> [$orden[$b['accion']], $b['lote']['insumo']]);
+        }
+        unset($d);
+        return array_values($dias);
     }
 }

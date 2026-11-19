@@ -87,6 +87,36 @@ verificar('todo resultado trae al menos un motivo', count(array_filter($res['res
 verificar('confianza en palabras', in_array($por['Pollo#2']['confianza'], ['alta', 'media', 'baja'], true));
 verificar('la explicación guardada en la BD es el motivo legible', str_contains($repo->decisiones[0]['explicacion'], ' ') && !str_contains($repo->decisiones[0]['explicacion'], 'SI '));
 
+echo "\nPlan por días\n";
+$plan = $res['plan_dias'];
+foreach ($plan as $d) {
+    $txt = array_map(static fn($b) => $b['accion'] . ':' . $b['lote']['insumo'], $d['bloques']);
+    $ven = array_map(static fn($v) => $v['insumo'] . ' -> ' . $v['estado'], $d['vencen']);
+    echo "      Día {$d['dia']} ({$d['etiqueta']}, {$d['fecha']}, {$d['tipo_dia']}) acciones: " . implode(', ', $txt) . ' | vencen: ' . implode('; ', $ven) . "\n";
+}
+verificar('el plan tiene 3 días', count($plan) === 3 && array_column($plan, 'etiqueta') === ['Hoy', 'Mañana', 'Pasado mañana']);
+$accionesDia1 = array_map(static fn($b) => $b['accion'] . ':' . $b['lote']['insumo'], $plan[0]['bloques']);
+verificar('día 1: menú de emergencia primero, luego descartes y compras', $accionesDia1[0] === 'menu_emergencia:Pollo' && in_array('descartar:Calamar', $accionesDia1, true) && in_array('comprar:Lechuga', $accionesDia1, true));
+verificar('día 1 lista lo que vence hoy y lo ya vencido', count($plan[0]['vencen']) === 3);
+verificar('día 3 lista lo que vence en 2 días (Lengua)', array_column($plan[2]['vencen'], 'insumo') === ['Lengua de res']);
+verificar('el sábado se marca como fin de semana', $plan[2]['tipo_dia'] === 'fin_de_semana');
+verificar('cada día trae las ventas esperadas de los 6 platos, de mayor a menor', count($plan[0]['ventas']) === 6
+    && $plan[0]['ventas'][0]['plato'] === 'Pollo Frito con Salsa Thai' && $plan[0]['ventas'][0]['porciones'] === 18);
+verificar('los bloques traen su propio motivo legible', count(array_filter($plan[0]['bloques'], static fn($b) => $b['motivo'] === [])) === 0);
+verificar('la compra de la lechuga no arrastra el motivo del descarte (cada acción su motivo)',
+    str_contains(implode(' ', array_values(array_filter($plan[0]['bloques'], static fn($b) => $b['accion'] === 'descartar'))[0]['motivo']), 'cadena de frío')
+    && !str_contains(implode(' ', array_values(array_filter($plan[0]['bloques'], static fn($b) => $b['accion'] === 'comprar'))[0]['motivo']), 'cadena de frío'));
+
+// Promociones repartidas en varios días (A* puede elegir días distintos): se agrupan en su día
+$sint = [['lote' => ['insumo' => 'Lengua', 'stock_actual' => 9000.0, 'dias_vida' => 2], 'accion' => 'promocionar', 'fc' => 0.45, 'alertas' => [], 'tecnico' => [],
+    'items' => [['cantidad' => '5 porciones', 'nombre' => 'P1', 'nota' => 'mañana', 'dia' => 2, 'accion' => 'promocionar'],
+                ['cantidad' => '4 porciones', 'nombre' => 'P2', 'nota' => 'pasado mañana', 'dia' => 3, 'accion' => 'promocionar']],
+    'metricas_por_accion' => [], 'motivos' => ['promocionar' => ['x']], 'motivo' => ['x'], 'fc_por_accion' => ['promocionar' => 0.45]]];
+$p2 = Sistema::armarPlanDias($sint, [['fecha' => '2026-11-19', 'tipo_dia' => 'laboral'], ['fecha' => '2026-11-20', 'tipo_dia' => 'laboral'], ['fecha' => '2026-11-21', 'tipo_dia' => 'fin_de_semana']]);
+verificar('promociones en días distintos van cada una a su día', $p2[0]['bloques'] === [] && count($p2[1]['bloques']) === 1 && count($p2[2]['bloques']) === 1 && $p2[1]['bloques'][0]['items'][0]['cantidad'] === '5 porciones');
+verificar('la consulta de emergencia no genera plan por días', (new Sistema(new RepositorioMemoria($lotes, $insumos)))->ejecutar(['tipo' => 'emergencia'], $hoy)['plan_dias'] === []);
+verificar('decision guarda dia_plan = 1 para el menú de emergencia', ($repo->decisiones[array_key_first(array_filter($repo->decisiones, static fn($d) => $d['accion'] === 'menu_emergencia'))]['dia_plan'] ?? null) === 1);
+
 echo "\nFormulario: el usuario marca el Pollo en mal estado y agrega un feriado mañana\n";
 $repo2 = new RepositorioMemoria($lotes, $insumos);
 $entrada = ['tipo' => 'emergencia', 'tipo_dia' => ['2026-11-20' => 'feriado'],

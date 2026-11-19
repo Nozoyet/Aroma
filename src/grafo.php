@@ -32,6 +32,12 @@ final class Grafo
         }
     }
 
+    /** Todos los platos con receta: [plato_id => nombre]. */
+    public function platos(): array
+    {
+        return array_map(static fn(array $p): string => $p['nombre'], $this->platos);
+    }
+
     /** Platos que usan el insumo: [plato_id => gramos por porción]. */
     public function vecinos(int $insumoId): array
     {
