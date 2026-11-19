@@ -59,18 +59,33 @@ $por = [];
 foreach ($res['resultados'] as $r) {
     $por[$r['lote']['insumo'] . '#' . $r['lote']['lote_id']] = $r;
     printf("      %-22s -> %-16s FC %.3f  %s\n", $r['lote']['insumo'] . ' (lote ' . $r['lote']['lote_id'] . ')',
-        $r['accion'] ?? 'sin accion', $r['fc'], implode(' | ', $r['filas']));
+        $r['accion'] ?? 'sin accion', $r['fc'], implode(' | ', array_map(static fn($i) => trim("{$i['cantidad']} {$i['nombre']}"), $r['items'])));
 }
 verificar('Lengua (lote 1): promocionar con A*', ($por['Lengua de res#1']['accion'] ?? '') === 'promocionar');
 verificar('Pollo (lote 2): menú de emergencia con DFS', ($por['Pollo#2']['accion'] ?? '') === 'menu_emergencia');
 verificar('Calamar (lote 3): descartar', ($por['Calamar#3']['accion'] ?? '') === 'descartar');
-verificar('Papa vencida (lote 4): sin acción y con alerta', isset($por['Papa#4']) && $por['Papa#4']['accion'] === null && $por['Papa#4']['alertas'] !== []);
+verificar('Papa vencida (lote 4): sin acción y pide revisión manual', isset($por['Papa#4']) && $por['Papa#4']['accion'] === null && str_contains(implode(' ', $por['Papa#4']['motivo']), 'manualmente'));
 verificar('Lechuga (lote 5): comprar', ($por['Lechuga#5']['accion'] ?? '') === 'comprar');
 verificar('Trucha (lote 6): mantener', ($por['Trucha#6']['accion'] ?? '') === 'mantener');
 verificar('se registró 1 consulta con sus decisiones', count($repo->consultas) === 1 && count($repo->decisiones) >= 6);
 verificar('cada decisión guarda las reglas disparadas', count($repo->reglasDecision) === count($repo->decisiones));
 verificar('toda decisión trae explicación', !in_array('', array_column($repo->decisiones, 'explicacion'), true));
 verificar('ahorro total > 0', $res['ahorro_total'] > 0);
+
+echo "\nJustificaciones en lenguaje sencillo\n";
+foreach ($res['resultados'] as $r) {
+    if (in_array($r['lote']['lote_id'], [1, 2, 3, 4, 5, 6], true)) {
+        echo '      ' . $r['lote']['insumo'] . ': ' . implode(' ', $r['motivo']) . "\n";
+    }
+}
+$tecnicos = 0;
+foreach ($res['resultados'] as $r) {
+    $tecnicos += preg_match('/\bR\d{1,2}\b|\bFC\b|ENTONCES/', implode(' ', $r['motivo']));
+}
+verificar('ningún motivo muestra reglas (R7), FC ni ENTONCES', $tecnicos === 0);
+verificar('todo resultado trae al menos un motivo', count(array_filter($res['resultados'], static fn($r) => $r['motivo'] === [])) === 0);
+verificar('confianza en palabras', in_array($por['Pollo#2']['confianza'], ['alta', 'media', 'baja'], true));
+verificar('la explicación guardada en la BD es el motivo legible', str_contains($repo->decisiones[0]['explicacion'], ' ') && !str_contains($repo->decisiones[0]['explicacion'], 'SI '));
 
 echo "\nFormulario: el usuario marca el Pollo en mal estado y agrega un feriado mañana\n";
 $repo2 = new RepositorioMemoria($lotes, $insumos);

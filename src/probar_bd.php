@@ -27,9 +27,10 @@ foreach ($res['resultados'] as $r) {
     $l = $r['lote'];
     printf("%-18s lote %-3d %8.0f g  vida %2d d -> %-16s FC %.3f\n", $l['insumo'], $l['lote_id'],
         $l['stock_actual'], $l['dias_vida'], $r['accion'] ?? 'sin accion', $r['fc']);
-    foreach ($r['filas'] as $f) {
-        echo "      {$f}\n";
+    foreach ($r['items'] as $i) {
+        echo '      ' . trim("{$i['cantidad']} {$i['nombre']} {$i['nota']}") . "\n";
     }
+    echo '      ' . implode(' ', $r['motivo']) . "\n";
     foreach ($r['alertas'] as $a) {
         echo "      ALERTA: {$a}\n";
     }

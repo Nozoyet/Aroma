@@ -114,7 +114,6 @@ final class Sistema
         }
 
         $motor = new MotorReglas($reglas, $par);
-
         $expl  = new Explicador($reglas, $grafo);
         $dfs   = new Dfs($grafo);
         $astar = new AEstrella($grafo);
@@ -156,28 +155,33 @@ final class Sistema
                 'platos'            => $platos,
             ];
             $inf = $motor->inferir($lote, $ctx);
-            $lineas = $expl->lote($lote, $inf);
-
-            // Acciones a registrar: cada una es [accion, fc, lote_id, plato_id, dia, porciones, costo, ahorro]
-            $filas = [];      // texto para la pantalla
-            $registros = [];  // filas para la tabla decision
+            $tecnico   = $expl->lote($lote, $inf);   // detalle técnico (reglas disparadas), opcional en pantalla
+            $items     = [];   // lo que se muestra: ['cantidad', 'nombre', 'nota']
+            $metricas  = [];   // cifras clave: ['etiqueta', 'valor']
+            $motivo    = [];   // justificación en lenguaje sencillo
+            $registros = [];   // filas para la tabla decision
+            $alertas   = $inf['alertas'];
             $principal = $inf['accion_principal'];
+            $descuento = (float)($par['descuento_promo'] ?? 0.10);
 
             if ($principal === 'menu_emergencia') {
                 $r = $dfs->resolver($insumoId, $lote['stock_actual'], $costoG, $stockTotal, $par);
-                array_push($lineas, ...$expl->dfs($r));
+                array_push($tecnico, ...$expl->dfs($r));
+                $motivo = $expl->motivoMenu($lote, $r, $stockTotal);
                 foreach ($r['menu'] as $platoId => $k) {
-                    $filas[] = sprintf('%s: %d porciones', $grafo->nombrePlato($platoId), $k);
+                    $items[] = ['cantidad' => $k . ($k === 1 ? ' porción' : ' porciones'),
+                                'nombre' => $grafo->nombrePlato($platoId), 'nota' => ''];
                     $registros[] = ['accion' => 'menu_emergencia', 'fc' => $inf['fc_principal'], 'plato_id' => $platoId,
                         'porciones' => $k, 'ahorro' => $k * $grafo->gramos($platoId, $insumoId) * $costoG];
                 }
                 if ($r['menu'] === []) {
-                    $filas[] = 'No se puede armar un menú con el stock actual.';
                     $registros[] = ['accion' => 'menu_emergencia', 'fc' => $inf['fc_principal'], 'costo' => $r['valor_lote']];
                 }
-                if ($r['advertencia'] !== null) {
-                    $inf['alertas'][] = $r['advertencia'];
-                }
+                $metricas = [
+                    ['etiqueta' => 'Se aprovecha', 'valor' => round($r['porcentaje'] * 100) . ' % del lote'],
+                    ['etiqueta' => 'Valor rescatado', 'valor' => Explicador::bs($r['valor_rescatado'])],
+                    ['etiqueta' => 'Sobrante', 'valor' => Explicador::peso($r['gramos_sobrante'])],
+                ];
             } elseif ($principal === 'promocionar') {
                 $base = [];
                 for ($d = 0; $d < $dias; $d++) {
@@ -189,24 +193,37 @@ final class Sistema
                 }
                 $r = $astar->planificar($insumoId, $lote['stock_actual'], $costoG, $base,
                     $inf['platos_promocion'], $stockTotal, $par);
-                array_push($lineas, ...$expl->aEstrella($r));
+                array_push($tecnico, ...$expl->aEstrella($r));
+                $motivo = $expl->motivoPromocion($lote, $r, $costoG, $descuento);
                 foreach ($r['plan'] as $p) {
-                    $filas[] = sprintf('Día %d: promocionar %d porciones de %s', $p['dia'], $p['porciones'], $grafo->nombrePlato($p['plato_id']));
+                    $items[] = ['cantidad' => $p['porciones'] . ($p['porciones'] === 1 ? ' porción' : ' porciones'),
+                                'nombre' => $grafo->nombrePlato($p['plato_id']),
+                                'nota' => Explicador::diaTxt($p['dia']) . ' · ' . round($descuento * 100) . ' % de descuento'];
                     $registros[] = ['accion' => 'promocionar', 'fc' => $inf['fc_principal'], 'plato_id' => $p['plato_id'],
                         'dia_plan' => $p['dia'], 'porciones' => $p['porciones'], 'costo' => $p['descuento'],
                         'ahorro' => $p['gramos'] * $costoG - $p['descuento']];
                 }
                 if ($r['plan'] === []) {
-                    $filas[] = 'No hace falta promocionar: la demanda esperada consume el lote.';
                     $registros[] = ['accion' => 'mantener', 'fc' => $inf['fc_principal']];
                     $principal = 'mantener';
+                } else {
+                    $metricas = [
+                        ['etiqueta' => 'Sin hacer nada se pierde', 'valor' => Explicador::bs($r['costo_sin_intervencion'])],
+                        ['etiqueta' => 'Con la promoción cuesta', 'valor' => Explicador::bs($r['costo_total'])],
+                        ['etiqueta' => 'Ahorro', 'valor' => Explicador::bs($r['ahorro'])],
+                    ];
                 }
             } elseif ($principal === 'descartar') {
-                $filas[] = sprintf('Descartar el lote (pérdida de %.2f Bs).', $lote['valor_lote']);
+                $motivo = $expl->motivoDescarte($lote, $inf);
+                $items[] = ['cantidad' => 'Descartar el lote', 'nombre' => $lote['insumo'],
+                            'nota' => 'pérdida de ' . Explicador::bs($lote['valor_lote'])];
                 $registros[] = ['accion' => 'descartar', 'fc' => $inf['fc_principal'], 'costo' => $lote['valor_lote']];
             } elseif ($principal === 'mantener') {
-                $filas[] = 'Mantener: el lote se consume antes de vencer.';
+                $motivo = $expl->motivoMantener($lote);
                 $registros[] = ['accion' => 'mantener', 'fc' => $inf['fc_principal']];
+            } elseif ($principal === null) {
+                $motivo = $expl->motivoSinAccion($lote);
+                $alertas = [];   // el motivo ya explica el caso
             }
 
             // Compra: acción principal o complementaria (p. ej. descartar y además reponer), una por insumo
@@ -217,17 +234,18 @@ final class Sistema
                     $gramos = max(0.0, round(($c['consumo_diario_g'] * $objetivo - $c['stock_total_g']) / 100) * 100);
                     if ($gramos > 0) {
                         $comprasHechas[$insumoId] = true;
-                        array_push($lineas, ...$expl->compra($gramos, $c['stock_total_g'], $c['consumo_diario_g'], $objetivo));
-                        $filas[] = sprintf('Comprar aprox. %.0f g de %s.', $gramos, $lote['insumo']);
+                        array_push($tecnico, ...$expl->compra($gramos, $c['stock_total_g'], $c['consumo_diario_g'], $objetivo));
+                        array_push($motivo, ...$expl->motivoCompra($lote, $inf, $gramos, $c, $objetivo));
+                        $items[] = ['cantidad' => 'Comprar ≈ ' . Explicador::peso($gramos), 'nombre' => $lote['insumo'], 'nota' => ''];
                         $registros[] = ['accion' => 'comprar', 'fc' => $inf['acciones']['comprar'], 'costo' => $gramos * $costoG];
                         $principal ??= 'comprar';
                     }
                 }
             }
 
-            // Guardar en el historial (solo si hay algo que registrar)
+            // Guardar en el historial: la explicación guardada es la misma que lee el usuario
             $ids = [];
-            $texto = implode("\n", $lineas);
+            $texto = implode("\n", $motivo);
             foreach ($registros as $reg) {
                 $decisionId = $this->repo->guardarDecision($reg + [
                     'consulta_id' => $consultaId, 'lote_id' => $lote['lote_id'], 'explicacion' => $texto,
@@ -237,14 +255,17 @@ final class Sistema
             }
 
             $resultados[] = [
-                'lote'        => $lote,
-                'accion'      => $principal,
-                'fc'          => $inf['fc_principal'],
-                'filas'       => $filas,
-                'alertas'     => $inf['alertas'],
-                'explicacion' => $lineas,
-                'decisiones'  => $ids,
-                'ahorro'      => array_sum(array_column($registros, 'ahorro')),
+                'lote'       => $lote,
+                'accion'     => $principal,
+                'fc'         => $inf['fc_principal'],
+                'confianza'  => $principal === null ? null : Explicador::confianza($inf['fc_principal']),
+                'items'      => $items,
+                'metricas'   => $metricas,
+                'motivo'     => $motivo,
+                'alertas'    => $alertas,
+                'tecnico'    => $tecnico,
+                'decisiones' => $ids,
+                'ahorro'     => array_sum(array_column($registros, 'ahorro')),
             ];
         }
 
