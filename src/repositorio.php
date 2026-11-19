@@ -5,7 +5,7 @@ declare(strict_types=1);
  * Repositorio: único lugar donde hay SQL. El resto del sistema recibe arrays.
  * Todas las consultas usan sentencias preparadas.
  */
-final class Repositorio
+class Repositorio
 {
     private PDO $pdo;
 
@@ -161,6 +161,45 @@ final class Repositorio
             }
         }
         return $lista;
+    }
+
+    /**
+     * Estadística de ventas por plato y día de la semana (base de DemandaPromedio, versión 1).
+     * Usa los $dias previos a $hasta (sin incluirla). Los feriados se excluyen porque distorsionan el promedio.
+     * Devuelve [plato_id => [dow => ['prom' => float, 'desv' => float, 'n' => int]]], con dow 0 = lunes ... 6 = domingo.
+     */
+    public function estadisticasDemanda(string $hasta, int $dias = 90): array
+    {
+        $desde = (new DateTimeImmutable($hasta))->modify("-{$dias} day")->format('Y-m-d');
+        $st = $this->pdo->prepare(
+            "SELECT v.plato_id, WEEKDAY(v.fecha) AS dow, AVG(v.porciones_vendidas) AS prom,
+                    STDDEV_POP(v.porciones_vendidas) AS desv, COUNT(*) AS n
+             FROM   venta_diaria v
+             JOIN   calendario_dia c ON c.fecha = v.fecha
+             WHERE  v.fecha >= :desde AND v.fecha < :hasta AND c.tipo_dia <> 'feriado'
+             GROUP BY v.plato_id, WEEKDAY(v.fecha)"
+        );
+        $st->execute([':desde' => $desde, ':hasta' => $hasta]);
+
+        $salida = [];
+        foreach ($st->fetchAll() as $f) {
+            $salida[(int)$f['plato_id']][(int)$f['dow']] = [
+                'prom' => (float)$f['prom'], 'desv' => (float)$f['desv'], 'n' => (int)$f['n'],
+            ];
+        }
+        return $salida;
+    }
+
+    /** Usuario con el que se registran las consultas (no hay inicio de sesión en la versión 1). */
+    public function usuarioPorDefecto(): int
+    {
+        $id = $this->pdo->query('SELECT usuario_id FROM usuario ORDER BY usuario_id LIMIT 1')->fetchColumn();
+        if ($id === false) {
+            // Tabla vacía (seed no cargado o limpiado): se crea un usuario base para poder registrar consultas
+            $this->pdo->exec("INSERT INTO usuario (nombre, rol) VALUES ('Administrador', 'administrador')");
+            return (int)$this->pdo->lastInsertId();
+        }
+        return (int)$id;
     }
 
     // ------------------------------------------------------------------
