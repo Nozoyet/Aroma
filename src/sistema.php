@@ -134,6 +134,22 @@ final class Sistema
             ($e['observaciones'] ?? '') === '' ? null : mb_substr((string)$e['observaciones'], 0, 300)
         );
 
+        // Demanda base (g) de cada insumo en cada día del horizonte. Los lotes se procesan del que vence
+        // primero al que vence después (FEFO): cada lote consume primero la demanda, y lo que queda es lo
+        // que verán los lotes siguientes del mismo insumo.
+        $demandaRest = [];
+        $demandaBase = function (int $insumoId) use ($grafo, $demanda, $fechas): array {
+            $dia = [];
+            foreach ($fechas as $d => $fecha) {
+                $g = 0.0;
+                foreach ($grafo->vecinos($insumoId) as $platoId => $peso) {
+                    $g += $demanda->estimar($platoId, $fecha)['porciones'] * $peso;
+                }
+                $dia[$d] = $g;
+            }
+            return $dia;
+        };
+
         // 3) Inferir y decidir lote por lote
         $resultados = [];
         $comprasHechas = [];
@@ -198,14 +214,8 @@ final class Sistema
                 $motivos['menu_emergencia'] = $motivo;
                 $metricasPorAccion['menu_emergencia'] = $metricas;
             } elseif ($principal === 'promocionar') {
-                $base = [];
-                for ($d = 0; $d < $dias; $d++) {
-                    $g = 0.0;
-                    foreach ($grafo->vecinos($insumoId) as $platoId => $peso) {
-                        $g += $demanda->estimar($platoId, $fechas[$d])['porciones'] * $peso;
-                    }
-                    $base[] = $g;
-                }
+                $demandaRest[$insumoId] ??= $demandaBase($insumoId);
+                $base = array_slice($demandaRest[$insumoId], 0, $dias);
                 $r = $astar->planificar($insumoId, $lote['stock_actual'], $costoG, $base,
                     $inf['platos_promocion'], $stockTotal, $par);
                 array_push($tecnico, ...$expl->aEstrella($r));
@@ -262,6 +272,18 @@ final class Sistema
                         $registros[] = ['accion' => 'comprar', 'fc' => $inf['acciones']['comprar'], 'dia_plan' => 1, 'costo' => $gramos * $costoG];
                         $principal ??= 'comprar';
                     }
+                }
+            }
+
+            // Este lote absorbe demanda; los lotes que vencen después del mismo insumo verán solo el resto.
+            // Un lote descartado o ya vencido no vende nada.
+            if ($principal !== 'descartar' && $lote['dias_vida'] >= 0) {
+                $demandaRest[$insumoId] ??= $demandaBase($insumoId);
+                $queda = $lote['stock_actual'];
+                for ($d = 0; $d < $dias; $d++) {
+                    $toma = min($queda, $demandaRest[$insumoId][$d]);
+                    $demandaRest[$insumoId][$d] -= $toma;
+                    $queda -= $toma;
                 }
             }
 

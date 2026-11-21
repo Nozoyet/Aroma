@@ -152,5 +152,22 @@ $res = (new Sistema($repo3))->ejecutar(['tipo' => 'plan_3_dias', 'nuevo_lote' =>
     'insumo_id' => '4', 'fecha_vencimiento' => '2026-11-22', 'cantidad' => 5000, 'visual' => 'bueno', 'frio' => 'cumple']], $hoy);
 verificar('el lote nuevo aparece en los resultados', in_array(101, array_map(static fn($r) => $r['lote']['lote_id'], $res['resultados']), true));
 
+echo "\nDos lotes de lengua (el que vence antes consume la demanda primero)\n";
+$lotes2 = array_map(static function ($l) {
+    if ($l['lote_id'] === 1) { $l['stock_actual'] = 6000.0; $l['dias_vida'] = 1; }
+    return $l;
+}, $lotes);
+$lotes2[] = ['lote_id' => 18, 'insumo_id' => 1, 'stock_actual' => 12000.0, 'estado_visual' => 'bueno', 'cadena_frio' => 'cumple', 'dias_vida' => 2];
+$res = (new Sistema(new RepositorioMemoria($lotes2, $insumos)))->ejecutar(['tipo' => 'plan_3_dias'], $hoy);
+$len = [];
+foreach ($res['resultados'] as $r) {
+    if ($r['lote']['insumo_id'] === 1) { $len[$r['lote']['lote_id']] = $r; }
+}
+foreach ($len as $id => $r) {
+    echo "      lote {$id}: " . ($r['accion'] ?? 'sin accion') . ' - ' . implode(' | ', array_map(static fn($i) => trim("{$i['cantidad']} {$i['nombre']} {$i['nota']}"), $r['items'])) . "\n";
+}
+verificar('lote viejo (6000 g, vence en 1 día): se vende solo, no se promociona', ($len[1]['accion'] ?? '') === 'mantener');
+verificar('lote nuevo (12000 g, vence en 2 días): sí se promociona, porque el viejo ya absorbió demanda', ($len[18]['accion'] ?? '') === 'promocionar' && $len[18]['items'] !== []);
+
 echo "\n" . ($fallos === 0 ? "Todas las pruebas pasaron.\n" : "{$fallos} prueba(s) fallaron.\n");
 exit($fallos === 0 ? 0 : 1);
