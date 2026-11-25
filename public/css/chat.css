@@ -1,0 +1,141 @@
+/* Chat flotante de Aroma. Todo con prefijo .ac- para no chocar con los estilos de la página. */
+.ac { --ac-caja: var(--caja, #181716); --ac-texto: var(--titulo, #DCD0BB); --ac-acento: var(--sub, #C18A36);
+      --ac-linea: var(--linea, #A65F19); --ac-sec: var(--sec, #A69A89);
+      position: fixed; right: 16px; bottom: 12px; z-index: 900; display: flex; flex-direction: column; gap: 6px;
+      font: 14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; color: var(--ac-texto); }
+.ac.abierto { width: min(340px, calc(100vw - 24px)); }
+.ac [hidden] { display: none !important; }
+
+.ac-panel { display: flex; flex-direction: column; height: min(360px, 52vh); background: var(--ac-caja);
+            border: 1px solid var(--ac-linea); border-radius: 12px; overflow: hidden; box-shadow: 0 8px 28px rgba(0,0,0,.55); }
+.ac-cab { display: flex; justify-content: space-between; align-items: center; padding: 8px 12px;
+          border-bottom: 1px solid var(--ac-linea); color: var(--ac-acento); font-size: .78rem; letter-spacing: .12em; text-transform: uppercase; }
+.ac-cerrar { background: none; border: 0; color: var(--ac-sec); font-size: 1.3rem; line-height: 1; cursor: pointer; padding: 0 4px; }
+.ac-cerrar:hover { color: var(--ac-texto); }
+
+.ac-msgs { flex: 1; overflow-y: auto; padding: 10px; display: flex; flex-direction: column; gap: 8px; }
+.ac-msg { max-width: 92%; padding: 8px 10px; border-radius: 10px; white-space: pre-wrap; overflow-wrap: anywhere; }
+.ac-msg.bot { align-self: flex-start; background: #232120; border: 1px solid #3a2c18; }
+.ac-msg.yo  { align-self: flex-end; background: rgba(193,138,54,.2); border: 1px solid rgba(193,138,54,.45); }
+
+.ac-chips { display: flex; flex-wrap: wrap; gap: 6px; padding: 0 10px 10px; }
+.ac-chips button { background: transparent; color: var(--ac-acento); border: 1px solid var(--ac-linea); border-radius: 999px;
+                   padding: 3px 10px; font: inherit; font-size: .8rem; cursor: pointer; }
+.ac-chips button:hover { background: rgba(193,138,54,.15); }
+
+.ac-mascota { align-self: flex-start; background: none; border: 0; padding: 0; line-height: 0; cursor: pointer; border-radius: 12px; }
+.ac:not(.abierto) .ac-mascota { align-self: flex-end; }
+.ac-mascota img { display: block; width: 100px; height: 70px; filter: drop-shadow(0 3px 5px rgba(0,0,0,.65)); transition: transform .15s; }
+.ac-mascota:hover img { transform: translateY(-2px); }
+.ac-salto { animation: ac-salto .35s ease; }
+@keyframes ac-salto { 0% { transform: translateY(0); } 40% { transform: translateY(-7px); } 100% { transform: translateY(0); } }
+
+.ac-entrada { display: flex; gap: 6px; padding: 6px; background: var(--ac-caja); border: 1px solid var(--ac-linea); border-radius: 10px; }
+.ac-input { flex: 1; min-width: 0; background: #0f0e0d; color: var(--ac-texto); border: 1px solid var(--ac-linea);
+            border-radius: 8px; padding: 8px 10px; font: inherit; }
+.ac-enviar { background: var(--ac-acento); color: #1a1205; border: 0; border-radius: 8px; padding: 0 14px; font: inherit; font-weight: 600; cursor: pointer; }
+.ac-enviar:disabled { opacity: .5; cursor: default; }
+
+.ac button:focus-visible, .ac-input:focus-visible { outline: 2px solid var(--ac-acento); outline-offset: 2px; }
+@media (prefers-reduced-motion: reduce) { .ac-salto { animation: none; } .ac-mascota img { transition: none; } }
+@media print { .ac { display: none; } }
+
+/* Acabado del asistente flotante: conserva el estilo de Aroma y sus controles aislados. */
+.ac {
+  --ac-caja: var(--caja, #181716);
+  --ac-texto: var(--titulo, #DCD0BB);
+  --ac-acento: var(--sub, #C18A36);
+  --ac-linea: var(--linea, #A65F19);
+  --ac-sec: var(--sec, #A69A89);
+  right: max(18px, env(safe-area-inset-right));
+  bottom: max(16px, env(safe-area-inset-bottom));
+  gap: 8px;
+}
+.ac.abierto { width: min(330px, calc(100vw - 28px)); }
+.ac-panel {
+  height: min(390px, 52vh);
+  border: 1px solid color-mix(in srgb, var(--ac-acento) 62%, transparent);
+  border-radius: 18px;
+  background: linear-gradient(155deg, color-mix(in srgb, var(--ac-caja) 93%, #37513b), var(--ac-caja));
+  box-shadow: 0 18px 54px rgba(0,0,0,.58), 0 0 0 1px rgba(255,255,255,.025);
+  backdrop-filter: blur(12px);
+  animation: ac-aparece .22s ease-out both;
+}
+.ac-cab {
+  min-height: 58px;
+  gap: 10px;
+  padding: 9px 13px;
+  border-bottom-color: color-mix(in srgb, var(--ac-acento) 32%, transparent);
+  background: linear-gradient(100deg, rgba(73,105,69,.22), rgba(184,102,54,.12));
+  color: var(--ac-texto);
+  font-size: .8rem;
+  letter-spacing: .06em;
+}
+.ac-cab::before {
+  display: block;
+  width: 38px;
+  height: 38px;
+  flex: 0 0 38px;
+  content: "";
+  border-radius: 50%;
+  background: url("../mascota/neutral.png") center / contain no-repeat, rgba(255,255,255,.06);
+  image-rendering: pixelated;
+}
+.ac-cab span { flex: 1; }
+.ac-cab span::after {
+  display: block;
+  margin-top: 2px;
+  color: var(--ac-sec);
+  content: "Ayuda para tu cocina";
+  font-size: .72rem;
+  letter-spacing: 0;
+  text-transform: none;
+}
+.ac-cerrar { width: 34px; height: 34px; border-radius: 50%; transition: background .18s, color .18s; }
+.ac-cerrar:hover { background: rgba(255,255,255,.08); }
+.ac-msgs { padding: 13px; gap: 10px; }
+.ac-msg { padding: 10px 12px; border-radius: 14px; line-height: 1.5; }
+.ac-msg.bot { background: color-mix(in srgb, var(--ac-caja) 82%, #526744); border-color: color-mix(in srgb, var(--ac-linea) 48%, transparent); border-bottom-left-radius: 5px; }
+.ac-msg.yo { background: color-mix(in srgb, var(--ac-acento) 20%, var(--ac-caja)); border-color: color-mix(in srgb, var(--ac-acento) 48%, transparent); border-bottom-right-radius: 5px; }
+.ac-chips { max-height: 88px; overflow-y: auto; padding: 0 12px 11px; }
+.ac-chips button { padding: 5px 10px; background: rgba(255,255,255,.025); transition: background .18s, transform .18s; }
+.ac-chips button:hover { background: color-mix(in srgb, var(--ac-acento) 18%, transparent); transform: translateY(-1px); }
+.ac-entrada { padding: 7px; border-radius: 13px; background: var(--ac-caja); box-shadow: 0 10px 30px rgba(0,0,0,.3); }
+.ac-input { min-height: 42px; border-color: color-mix(in srgb, var(--ac-linea) 70%, transparent); background: rgba(0,0,0,.2); }
+.ac-enviar { min-width: 74px; background: linear-gradient(135deg, #e0ad62, var(--ac-acento)); transition: filter .18s, transform .18s; }
+.ac-enviar:hover:not(:disabled) { filter: brightness(1.08); transform: translateY(-1px); }
+.ac-mascota { position: relative; }
+.ac-mascota img { width: 100px; height: 70px; image-rendering: pixelated; transition: transform .2s ease, filter .2s ease; }
+.ac:not(.abierto) .ac-mascota img { animation: ac-flotar 3.6s ease-in-out infinite; }
+.ac-mascota:hover img, .ac-mascota:focus-visible img { filter: drop-shadow(0 6px 12px rgba(193,138,54,.3)); transform: translateY(-4px) scale(1.035); }
+.ac-mascota::after {
+  position: absolute;
+  right: calc(100% - 4px);
+  bottom: 22px;
+  width: max-content;
+  padding: 6px 10px;
+  content: "¿Te ayudo?";
+  border: 1px solid color-mix(in srgb, var(--ac-acento) 44%, transparent);
+  border-radius: 12px 12px 4px 12px;
+  background: var(--ac-caja);
+  color: var(--ac-texto);
+  font-size: .78rem;
+  line-height: 1.3;
+  opacity: 0;
+  pointer-events: none;
+  transform: translateY(4px);
+  transition: opacity .18s ease, transform .18s ease;
+}
+.ac-mascota:hover::after, .ac-mascota:focus-visible::after { opacity: 1; transform: translateY(0); }
+.ac-salto { animation: ac-salto .42s cubic-bezier(.2,.8,.3,1.2); }
+@keyframes ac-aparece { from { opacity: 0; transform: translateY(8px) scale(.985); } to { opacity: 1; transform: translateY(0) scale(1); } }
+@keyframes ac-flotar { 0%,100% { transform: translateY(0); } 50% { transform: translateY(-4px); } }
+@media (max-width: 480px) {
+  .ac.abierto { width: calc(100vw - 24px); }
+  .ac-panel { height: min(360px, 54dvh); }
+  .ac-mascota img { width: 84px; height: 59px; }
+  .ac-mascota::after { display: none; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .ac *, .ac *::before, .ac *::after { animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; scroll-behavior: auto !important; }
+}
