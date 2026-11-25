@@ -301,6 +301,144 @@ function lista_compacta(array $rs): void
   .vacio { color: var(--sec); }
   .vencen { margin: 0 0 14px; font-size: .95rem; } .vencen strong { color: var(--titulo); }
   @media (max-width: 600px) { main { padding: 24px 14px 60px; } h1 { font-size: 1.7rem; } }
+
+  /* Aroma: restobar de fusión entre Asia y Bolivia */
+  :root {
+    --fondo: #101713;
+    --caja: #1b241f;
+    --titulo: #f5ecdf;
+    --sub: #e5a45b;
+    --linea: #b66d3d;
+    --sec: #b9b7a8;
+    --alerta: #ed745d;
+    color-scheme: dark;
+  }
+  body {
+    min-height: 100vh;
+    background:
+      radial-gradient(ellipse at 5% 0%, rgba(76, 112, 76, .3), transparent 34rem),
+      radial-gradient(ellipse at 96% 30%, rgba(160, 77, 44, .15), transparent 30rem),
+      linear-gradient(180deg, #131d17, var(--fondo) 52rem);
+  }
+  main { max-width: 1120px; padding-top: 42px; }
+  .cabecera {
+    position: relative;
+    isolation: isolate;
+    min-height: 152px;
+    align-items: center;
+    overflow: hidden;
+    padding: 25px 32px;
+    border: 1px solid rgba(229, 164, 91, .32);
+    border-radius: 20px;
+    background: linear-gradient(105deg, rgba(37, 58, 43, .98), rgba(32, 43, 35, .94) 62%, rgba(78, 48, 34, .88));
+    box-shadow: 0 20px 50px rgba(0, 0, 0, .2);
+    animation: aroma-entra .65s both;
+  }
+  .cabecera::after {
+    position: absolute;
+    z-index: -1;
+    top: 50%; right: 34px;
+    width: 190px; height: 190px;
+    content: "";
+    border: 1px solid rgba(239, 195, 130, .34);
+    border-radius: 50%;
+    background: radial-gradient(circle, rgba(208, 130, 64, .26) 0 16%, transparent 17% 30%, rgba(239, 195, 130, .08) 31% 32%, transparent 33% 47%, rgba(239, 195, 130, .12) 48% 49%, transparent 50%);
+    box-shadow: 0 0 0 15px rgba(239, 195, 130, .025), 0 0 0 31px rgba(239, 195, 130, .025);
+    transform: translateY(-50%);
+    animation: aroma-pulso 9s ease-in-out infinite;
+  }
+  .cabecera > div, .cabecera > a { position: relative; z-index: 1; }
+  .cabecera > div:first-child::before {
+    display: block;
+    margin-bottom: 7px;
+    color: var(--sub);
+    content: "AROMA  ·  RESTOBAR DE FUSIÓN";
+    font-size: .67rem;
+    font-weight: 700;
+    letter-spacing: .2em;
+  }
+  h1 { color: #fff4e5; font-size: clamp(2.5rem, 5vw, 3.5rem); letter-spacing: -.035em; line-height: 1; }
+  .cabecera p { margin-top: 10px; font-size: .95rem; }
+  h2 { color: var(--sub); border-bottom-color: rgba(229, 164, 91, .3); margin-top: 40px; padding-bottom: 10px; }
+  .caja {
+    position: relative;
+    overflow: hidden;
+    background: linear-gradient(145deg, rgba(31, 43, 36, .98), rgba(24, 32, 27, .98));
+    border: 1px solid rgba(229, 164, 91, .22);
+    border-radius: 16px;
+    padding: 22px 26px;
+    box-shadow: 0 14px 34px rgba(0, 0, 0, .16);
+    animation: aroma-entra .55s both;
+  }
+  .caja h2 { position: relative; color: #e7b36f; }
+  .caja:has(.chk) {
+    border-color: rgba(229, 164, 91, .38);
+    background: radial-gradient(ellipse at 100% 0%, rgba(169, 92, 48, .12), transparent 25rem), linear-gradient(145deg, #24372c, #1b2821 70%);
+  }
+  .caja:has(.chk) h2 { color: #f4cf97; }
+  .chk {
+    min-height: 48px;
+    gap: 9px;
+    border-color: rgba(229, 164, 91, .36);
+    background: rgba(12, 20, 15, .68);
+    padding: 8px 15px;
+    transition: transform .2s ease, background .2s ease, border-color .2s ease, box-shadow .2s ease;
+  }
+  .chk:hover { transform: translateY(-2px); border-color: var(--sub); background: rgba(70, 58, 37, .72); }
+  .chk:has(input:checked) {
+    color: #fff3e3;
+    border-color: #e5a45b;
+    background: linear-gradient(135deg, rgba(163, 92, 45, .52), rgba(89, 103, 57, .52));
+    box-shadow: 0 4px 16px rgba(229, 164, 91, .12), inset 0 0 0 1px rgba(229, 164, 91, .15);
+  }
+  .chk input { width: 17px; height: 17px; accent-color: var(--sub); cursor: pointer; }
+  .chk:focus-within { outline: 2px solid var(--sub); outline-offset: 3px; }
+  .opcion { border-color: rgba(229, 164, 91, .3); background: rgba(255, 255, 255, .02); transition: transform .2s ease, border-color .2s ease, background .2s ease; }
+  .opcion:hover { transform: translateY(-2px); border-color: var(--sub); }
+  .opcion:has(input:checked) { border-color: var(--sub); background: rgba(229, 164, 91, .1); box-shadow: inset 0 0 0 1px rgba(229, 164, 91, .12); }
+  .dia { color: var(--titulo); }
+  input:not([type=checkbox]):not([type=radio]), select, textarea {
+    min-height: 42px;
+    border-color: rgba(229, 164, 91, .3);
+    border-radius: 9px;
+    background-color: #111a14;
+    padding: 8px 11px;
+  }
+  input:focus, select:focus, textarea:focus { outline-color: var(--sub); }
+  .tabla { border: 1px solid rgba(229, 164, 91, .18); border-radius: 11px; }
+  th, td { padding: 11px 12px; border-bottom-color: rgba(229, 164, 91, .14); }
+  th { background: rgba(229, 164, 91, .06); color: #dac6a8; }
+  tr:hover { background: rgba(229, 164, 91, .035); }
+  .btn { border-radius: 999px; padding: 12px 24px; background: linear-gradient(135deg, #edbd76, #cf8443); box-shadow: 0 8px 22px rgba(184, 106, 51, .2); transition: transform .2s ease, box-shadow .2s ease, filter .2s ease; }
+  .btn:hover { transform: translateY(-2px); box-shadow: 0 12px 26px rgba(184, 106, 51, .28); }
+  .btn-sec { color: var(--titulo); border: 1px solid rgba(229, 164, 91, .4); background: transparent; box-shadow: none; }
+  .resumen { gap: 12px; margin: 24px 0 30px; }
+  .resumen div { min-width: 138px; padding: 13px 16px; border: 1px solid rgba(229, 164, 91, .2); border-radius: 12px; background: rgba(255, 255, 255, .025); }
+  .resumen strong { display: block; margin: 0 0 3px; color: var(--sub); font: 600 1.35rem/1.2 Georgia, serif; }
+  .tarjeta, .opcional { background: linear-gradient(145deg, #202d25, #19221c); border-color: rgba(229, 164, 91, .22); border-radius: 15px; box-shadow: 0 12px 28px rgba(0, 0, 0, .14); }
+  .tarjeta { padding: 22px 25px; }
+  .tarjeta.grande { background: linear-gradient(130deg, rgba(119, 76, 42, .62), #202d25 78%); border-color: rgba(229, 164, 91, .65); }
+  .items li, .compacta li { border-top-color: rgba(229, 164, 91, .16); }
+  .porque { padding-top: 13px; border-top: 1px solid rgba(229, 164, 91, .16); }
+  .opcional { padding: 15px 19px; }
+  .error { border-radius: 12px; }
+  .acciones { padding-top: 5px; }
+  @keyframes aroma-entra { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+  @keyframes aroma-pulso { 0%, 100% { transform: translateY(-50%) scale(1); opacity: .9; } 50% { transform: translateY(-50%) scale(1.035); opacity: .68; } }
+  @media (max-width: 700px) {
+    main { padding: 24px 14px 56px; }
+    .cabecera { min-height: 132px; padding: 22px 20px; }
+    .cabecera::after { right: -54px; opacity: .6; }
+    .cabecera > div:first-child::before { max-width: 190px; font-size: .58rem; letter-spacing: .15em; }
+    .caja { padding: 19px 17px; }
+    .resumen div { min-width: calc(50% - 8px); flex: 1; }
+    .tarjeta, .tarjeta.grande { padding: 19px 17px; }
+    .acciones .btn { width: 100%; text-align: center; }
+    .chk { min-height: 44px; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after { animation-duration: .01ms !important; animation-iteration-count: 1 !important; scroll-behavior: auto !important; transition-duration: .01ms !important; }
+  }
 </style>
 </head>
 <body>
@@ -580,5 +718,6 @@ function lista_compacta(array $rs): void
 <?php endif; ?>
 
 </main>
+<?php if (is_file(__DIR__ . '/chat_widget.php')) { require __DIR__ . '/chat_widget.php'; } ?>
 </body>
 </html>
