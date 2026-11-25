@@ -190,6 +190,28 @@ class Repositorio
         return $salida;
     }
 
+    /**
+     * Serie diaria de ventas por plato (sin feriados), ordenada por fecha: base de la regresión.
+     * @return array<int, array<int, array{0: string, 1: float}>>
+     */
+    public function serieVentas(string $hasta, int $dias = 180): array
+    {
+        $desde = (new DateTimeImmutable($hasta))->modify("-{$dias} day")->format('Y-m-d');
+        $st = $this->pdo->prepare(
+            "SELECT v.plato_id, v.fecha, v.porciones_vendidas
+             FROM   venta_diaria v
+             JOIN   calendario_dia c ON c.fecha = v.fecha
+             WHERE  v.fecha >= :desde AND v.fecha < :hasta AND c.tipo_dia <> 'feriado'
+             ORDER BY v.plato_id, v.fecha"
+        );
+        $st->execute([':desde' => $desde, ':hasta' => $hasta]);
+        $salida = [];
+        foreach ($st->fetchAll() as $f) {
+            $salida[(int)$f['plato_id']][] = [(string)$f['fecha'], (float)$f['porciones_vendidas']];
+        }
+        return $salida;
+    }
+
     /** Usuario con el que se registran las consultas (no hay inicio de sesión en la versión 1). */
     public function usuarioPorDefecto(): int
     {
@@ -218,12 +240,22 @@ class Repositorio
     }
 
     /** Actualiza el estado de un lote existente (stock, estado visual y cadena de frío). */
-    public function actualizarLote(int $loteId, float $stock, string $estadoVisual, bool $cadenaFrioCumple): void
-    {
+    public function actualizarLote(
+        int $loteId, float $stock, string $estadoVisual, bool $cadenaFrioCumple, ?string $fechaVencimiento = null
+    ): void {
+        // MySQL evalúa las asignaciones de izquierda a derecha: las dos últimas ya ven el stock y el
+        // vencimiento nuevos. Si el stock corregido supera la cantidad inicial (recuento de inventario),
+        // la cantidad inicial sube; si el vencimiento queda antes del ingreso, el ingreso se adelanta.
         $st = $this->pdo->prepare(
-            'UPDATE lote SET stock_actual = :s, estado_visual = :v, cadena_frio = :c WHERE lote_id = :id'
+            'UPDATE lote
+             SET stock_actual = :s, estado_visual = :v, cadena_frio = :c,
+                 fecha_vencimiento = COALESCE(:fv, fecha_vencimiento),
+                 cantidad_inicial  = GREATEST(cantidad_inicial, stock_actual),
+                 fecha_ingreso     = LEAST(fecha_ingreso, fecha_vencimiento)
+             WHERE lote_id = :id'
         );
-        $st->execute([':s' => $stock, ':v' => $estadoVisual, ':c' => $cadenaFrioCumple ? 1 : 0, ':id' => $loteId]);
+        $st->execute([':s' => $stock, ':v' => $estadoVisual, ':c' => $cadenaFrioCumple ? 1 : 0,
+                      ':fv' => $fechaVencimiento, ':id' => $loteId]);
     }
 
     /** Registra un lote nuevo. Devuelve su lote_id. */

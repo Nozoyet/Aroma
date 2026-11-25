@@ -90,22 +90,22 @@ verificar('la explicación guardada en la BD es el motivo legible', str_contains
 echo "\nPlan por días\n";
 $plan = $res['plan_dias'];
 foreach ($plan as $d) {
-    $txt = array_map(static fn($b) => $b['accion'] . ':' . $b['lote']['insumo'], $d['bloques']);
+    $txt = array_map(static fn($b) => $b['accion'] . ':' . ($b['lote']['insumo'] ?? 'lista de compras'), $d['bloques']);
     $ven = array_map(static fn($v) => $v['insumo'] . ' -> ' . $v['estado'], $d['vencen']);
     echo "      Día {$d['dia']} ({$d['etiqueta']}, {$d['fecha']}, {$d['tipo_dia']}) acciones: " . implode(', ', $txt) . ' | vencen: ' . implode('; ', $ven) . "\n";
 }
 verificar('el plan tiene 3 días', count($plan) === 3 && array_column($plan, 'etiqueta') === ['Hoy', 'Mañana', 'Pasado mañana']);
-$accionesDia1 = array_map(static fn($b) => $b['accion'] . ':' . $b['lote']['insumo'], $plan[0]['bloques']);
-verificar('día 1: menú de emergencia primero, luego descartes y compras', $accionesDia1[0] === 'menu_emergencia:Pollo' && in_array('descartar:Calamar', $accionesDia1, true) && in_array('comprar:Lechuga', $accionesDia1, true));
+$accionesDia1 = array_map(static fn($b) => $b['accion'] . ':' . ($b['lote']['insumo'] ?? 'lista'), $plan[0]['bloques']);
+verificar('día 1: menú de emergencia primero, luego descartes y UNA lista de compras al final', $accionesDia1[0] === 'menu_emergencia:Pollo' && in_array('descartar:Calamar', $accionesDia1, true) && end($accionesDia1) === 'comprar:lista' && count(array_keys($accionesDia1, 'comprar:lista', true)) === 1);
+verificar('la lista de compras incluye la lechuga', in_array('Lechuga', array_column(end($plan[0]['bloques'])['items'], 'nombre'), true));
 verificar('día 1 lista lo que vence hoy y lo ya vencido', count($plan[0]['vencen']) === 3);
 verificar('día 3 lista lo que vence en 2 días (Lengua)', array_column($plan[2]['vencen'], 'insumo') === ['Lengua de res']);
 verificar('el sábado se marca como fin de semana', $plan[2]['tipo_dia'] === 'fin_de_semana');
 verificar('cada día trae las ventas esperadas de los 6 platos, de mayor a menor', count($plan[0]['ventas']) === 6
     && $plan[0]['ventas'][0]['plato'] === 'Pollo Frito con Salsa Thai' && $plan[0]['ventas'][0]['porciones'] === 18);
-verificar('los bloques traen su propio motivo legible', count(array_filter($plan[0]['bloques'], static fn($b) => $b['motivo'] === [])) === 0);
-verificar('la compra de la lechuga no arrastra el motivo del descarte (cada acción su motivo)',
-    str_contains(implode(' ', array_values(array_filter($plan[0]['bloques'], static fn($b) => $b['accion'] === 'descartar'))[0]['motivo']), 'cadena de frío')
-    && !str_contains(implode(' ', array_values(array_filter($plan[0]['bloques'], static fn($b) => $b['accion'] === 'comprar'))[0]['motivo']), 'cadena de frío'));
+verificar('los bloques con lote traen su propio motivo legible', count(array_filter($plan[0]['bloques'], static fn($b) => $b['lote'] !== null && $b['motivo'] === [])) === 0);
+verificar('el descarte del calamar conserva su propio motivo (cadena de frío)',
+    str_contains(implode(' ', array_values(array_filter($plan[0]['bloques'], static fn($b) => $b['accion'] === 'descartar'))[0]['motivo']), 'cadena de frío'));
 
 // Promociones repartidas en varios días (A* puede elegir días distintos): se agrupan en su día
 $sint = [['lote' => ['insumo' => 'Lengua', 'stock_actual' => 9000.0, 'dias_vida' => 2], 'accion' => 'promocionar', 'fc' => 0.45, 'alertas' => [], 'tecnico' => [],
@@ -151,6 +151,25 @@ $repo3 = new RepositorioMemoria($lotes, $insumos);
 $res = (new Sistema($repo3))->ejecutar(['tipo' => 'plan_3_dias', 'nuevo_lote' => [
     'insumo_id' => '4', 'fecha_vencimiento' => '2026-11-22', 'cantidad' => 5000, 'visual' => 'bueno', 'frio' => 'cumple']], $hoy);
 verificar('el lote nuevo aparece en los resultados', in_array(101, array_map(static fn($r) => $r['lote']['lote_id'], $res['resultados']), true));
+
+echo "\nEl usuario corrige el vencimiento y el stock de la lengua desde el formulario\n";
+// Lengua: 30000 g que vencen en 2 días (el lote venía de 15000 g y 2 días; se sube el stock por recuento)
+$repoV = new RepositorioMemoria($lotes, $insumos);
+$res = (new Sistema($repoV))->ejecutar(['tipo' => 'plan_3_dias',
+    'lotes' => [1 => ['stock' => 30000, 'vence' => '2026-11-21', 'visual' => 'bueno', 'frio' => 'cumple']]], $hoy);
+$len = array_values(array_filter($res['resultados'], static fn($r) => $r['lote']['lote_id'] === 1))[0];
+$diasPromo = array_unique(array_column($len['items'], 'dia'));
+echo '      acción: ' . $len['accion'] . ' | promociones en los días: ' . implode(', ', $diasPromo) . "\n";
+verificar('con 30000 g que vencen en 2 días, la lengua se promociona', $len['accion'] === 'promocionar');
+verificar('el plan reparte las promociones en más de un día', count($diasPromo) >= 2);
+verificar('el plan por días muestra promociones en el día 2 o 3', $res['plan_dias'][1]['bloques'] !== [] || $res['plan_dias'][2]['bloques'] !== []);
+try {
+    (new Sistema(new RepositorioMemoria($lotes, $insumos)))->ejecutar(['tipo' => 'plan_3_dias',
+        'lotes' => [1 => ['stock' => 100, 'vence' => '2026-13-45', 'visual' => 'bueno', 'frio' => 'cumple']]], $hoy);
+    verificar('rechaza una fecha de vencimiento imposible', false);
+} catch (InvalidArgumentException) {
+    verificar('rechaza una fecha de vencimiento imposible', true);
+}
 
 echo "\nDos lotes de lengua (el que vence antes consume la demanda primero)\n";
 $lotes2 = array_map(static function ($l) {

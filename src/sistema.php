@@ -10,15 +10,17 @@ declare(strict_types=1);
  *   'tipo'         'plan_3_dias' | 'emergencia'  (emergencia = solo lotes que vencen hoy o ya vencidos)
  *   'observaciones' texto libre (opcional)
  *   'tipo_dia'     [fecha => 'laboral'|'fin_de_semana'|'feriado']      para hoy y los días del horizonte
- *   'lotes'        [lote_id => ['stock' => g, 'visual' => bueno|regular|malo, 'frio' => cumple|no_cumple]]
- *   'nuevo_lote'   (opcional) ['insumo_id', 'fecha_vencimiento', 'cantidad', 'visual', 'frio']
+ *   'lotes'        [lote_id => ['stock' => g, 'vence' => Y-m-d (opcional), 'visual' => bueno|regular|malo, 'frio' => cumple|no_cumple]]
+ *   'nuevos_lotes' (opcional) lista de ['insumo_id', 'fecha_vencimiento', 'cantidad', 'visual', 'frio']; se aceptan varios
+ *   'insumos'      (opcional) lista de insumo_id a analizar; vacío = todos los insumos
  */
 final class Sistema
 {
     private const TIPOS_DIA = ['laboral', 'fin_de_semana', 'feriado'];
     private const VISUAL    = ['bueno', 'regular', 'malo'];
     private const FRIO      = ['cumple', 'no_cumple'];
-    private const VENTANA_HISTORIAL_DIAS = 90;
+    private const VENTANA_HISTORIAL_DIAS = 90;    // respaldo: promedio por día de la semana
+    private const VENTANA_REGRESION_DIAS = 180;   // mínimos cuadrados: 6 meses de historial
 
     public function __construct(private Repositorio $repo)
     {
@@ -58,22 +60,39 @@ final class Sistema
             if (!in_array($d['visual'] ?? '', self::VISUAL, true) || !in_array($d['frio'] ?? '', self::FRIO, true)) {
                 throw new InvalidArgumentException("Estado visual o cadena de frío no válidos en el lote {$id}.");
             }
+            $vence = $d['vence'] ?? '';
+            if ($vence !== '' && (!preg_match('/^\d{4}-\d{2}-\d{2}$/', (string)$vence) || !checkdate(
+                    (int)substr((string)$vence, 5, 2), (int)substr((string)$vence, 8, 2), (int)substr((string)$vence, 0, 4)))) {
+                throw new InvalidArgumentException("Fecha de vencimiento no válida en el lote {$id}.");
+            }
         }
-        $n = $e['nuevo_lote'] ?? null;
-        if (is_array($n) && ($n['insumo_id'] ?? '') !== '') {
+        foreach (self::lotesNuevos($e) as $k => $n) {
+            $c = 'Lote nuevo #' . ($k + 1) . ': ';
             if (!ctype_digit((string)$n['insumo_id'])) {
-                throw new InvalidArgumentException('Insumo del lote nuevo no válido.');
+                throw new InvalidArgumentException($c . 'insumo no válido.');
             }
             if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', (string)($n['fecha_vencimiento'] ?? '')) || $n['fecha_vencimiento'] < $hoy) {
-                throw new InvalidArgumentException('La fecha de vencimiento del lote nuevo no puede ser anterior a hoy.');
+                throw new InvalidArgumentException($c . 'la fecha de vencimiento no puede ser anterior a hoy.');
             }
             if (!is_numeric($n['cantidad'] ?? null) || (float)$n['cantidad'] <= 0) {
-                throw new InvalidArgumentException('La cantidad del lote nuevo debe ser mayor que cero.');
+                throw new InvalidArgumentException($c . 'la cantidad debe ser mayor que cero.');
             }
             if (!in_array($n['visual'] ?? '', self::VISUAL, true) || !in_array($n['frio'] ?? '', self::FRIO, true)) {
-                throw new InvalidArgumentException('Estado visual o cadena de frío del lote nuevo no válidos.');
+                throw new InvalidArgumentException($c . 'estado visual o cadena de frío no válidos.');
             }
         }
+        foreach ($e['insumos'] ?? [] as $id) {
+            if (!ctype_digit((string)$id)) {
+                throw new InvalidArgumentException('Insumo seleccionado no válido.');
+            }
+        }
+    }
+
+    /** Lotes nuevos escritos por el usuario (se descartan las filas sin insumo elegido). */
+    private static function lotesNuevos(array $e): array
+    {
+        $lista = $e['nuevos_lotes'] ?? (isset($e['nuevo_lote']) ? [$e['nuevo_lote']] : []);
+        return array_values(array_filter($lista, static fn($n): bool => is_array($n) && ($n['insumo_id'] ?? '') !== ''));
     }
 
     // ------------------------------------------------------------------
@@ -87,10 +106,10 @@ final class Sistema
             $this->repo->guardarCalendario($fecha, $tipoDia);
         }
         foreach ($e['lotes'] ?? [] as $id => $d) {
-            $this->repo->actualizarLote((int)$id, (float)$d['stock'], $d['visual'], $d['frio'] === 'cumple');
+            $this->repo->actualizarLote((int)$id, (float)$d['stock'], $d['visual'], $d['frio'] === 'cumple',
+                ($d['vence'] ?? '') === '' ? null : (string)$d['vence']);
         }
-        $n = $e['nuevo_lote'] ?? null;
-        if (is_array($n) && ($n['insumo_id'] ?? '') !== '') {
+        foreach (self::lotesNuevos($e) as $n) {
             $this->repo->insertarLote((int)$n['insumo_id'], null, $hoy, $n['fecha_vencimiento'],
                 (float)$n['cantidad'], $n['visual'], $n['frio'] === 'cumple');
         }
@@ -105,7 +124,11 @@ final class Sistema
         $insumos    = $this->repo->insumos();
         $tipos      = $this->repo->tiposDia($hoy, $horizonte);
         $grafo      = new Grafo($this->repo->recetas());
-        $demanda    = new DemandaPromedio($this->repo->estadisticasDemanda($hoy, self::VENTANA_HISTORIAL_DIAS));
+        // Demanda: regresión por mínimos cuadrados; si un plato tiene pocos datos usa el promedio por día
+        $demanda    = new DemandaMinimosCuadrados(
+            $this->repo->serieVentas($hoy, self::VENTANA_REGRESION_DIAS),
+            new DemandaPromedio($this->repo->estadisticasDemanda($hoy, self::VENTANA_HISTORIAL_DIAS))
+        );
 
         $fechas = array_column($tipos, 'fecha');
         $stockTotal = [];
@@ -113,11 +136,26 @@ final class Sistema
             $stockTotal[$insumoId] = $c['stock_total_g'];
         }
 
+        // Insumos que el usuario quiere priorizar (vacío = todos). Se analizan todos los lotes (el stock de
+        // los demás ingredientes sigue contando), pero solo se muestra lo que toca a los insumos elegidos.
+        $sel = array_values(array_unique(array_map('intval', $e['insumos'] ?? [])));
+        $soloPlatos = null;
+        if ($sel !== []) {
+            $soloPlatos = [];
+            foreach ($sel as $id) {
+                array_push($soloPlatos, ...array_keys($grafo->vecinos($id)));
+            }
+            $soloPlatos = array_values(array_unique($soloPlatos));
+        }
+
         // Ventas esperadas de cada día del horizonte (módulo de demanda), de mayor a menor
         $ventas = [];
         foreach ($fechas as $i => $fecha) {
             $fila = [];
             foreach ($grafo->platos() as $platoId => $nombre) {
+                if ($soloPlatos !== null && !in_array($platoId, $soloPlatos, true)) {
+                    continue;
+                }
                 $fila[] = ['plato' => $nombre, 'porciones' => (int)round($demanda->estimar($platoId, $fecha)['porciones'])];
             }
             usort($fila, static fn(array $a, array $b): int => $b['porciones'] <=> $a['porciones']);
@@ -197,9 +235,11 @@ final class Sistema
                 $r = $dfs->resolver($insumoId, $lote['stock_actual'], $costoG, $stockTotal, $par);
                 array_push($tecnico, ...$expl->dfs($r));
                 $motivo = $expl->motivoMenu($lote, $r, $stockTotal);
+                $motivo = array_merge($motivo, $expl->notaCalidad($inf));
                 foreach ($r['menu'] as $platoId => $k) {
                     $items[] = ['cantidad' => $k . ($k === 1 ? ' porción' : ' porciones'),
-                                'nombre' => $grafo->nombrePlato($platoId), 'nota' => '', 'dia' => 1, 'accion' => 'menu_emergencia'];
+                                'nombre' => $grafo->nombrePlato($platoId), 'nota' => '', 'dia' => 1, 'accion' => 'menu_emergencia',
+                                'plato_id' => $platoId, 'porciones' => $k];
                     $registros[] = ['accion' => 'menu_emergencia', 'fc' => $inf['fc_principal'], 'plato_id' => $platoId,
                         'dia_plan' => 1, 'porciones' => $k, 'ahorro' => $k * $grafo->gramos($platoId, $insumoId) * $costoG];
                 }
@@ -220,11 +260,13 @@ final class Sistema
                     $inf['platos_promocion'], $stockTotal, $par);
                 array_push($tecnico, ...$expl->aEstrella($r));
                 $motivo = $expl->motivoPromocion($lote, $r, $costoG, $descuento);
+                $motivo = array_merge($motivo, $expl->notaCalidad($inf));
                 foreach ($r['plan'] as $p) {
                     $items[] = ['cantidad' => $p['porciones'] . ($p['porciones'] === 1 ? ' porción' : ' porciones'),
                                 'nombre' => $grafo->nombrePlato($p['plato_id']),
                                 'nota' => Explicador::diaTxt($p['dia']) . ' · ' . round($descuento * 100) . ' % de descuento',
-                                'dia' => $p['dia'], 'accion' => 'promocionar'];
+                                'dia' => $p['dia'], 'accion' => 'promocionar',
+                                'plato_id' => $p['plato_id'], 'porciones' => $p['porciones']];
                     $registros[] = ['accion' => 'promocionar', 'fc' => $inf['fc_principal'], 'plato_id' => $p['plato_id'],
                         'dia_plan' => $p['dia'], 'porciones' => $p['porciones'], 'costo' => $p['descuento'],
                         'ahorro' => $p['gramos'] * $costoG - $p['descuento']];
@@ -251,7 +293,7 @@ final class Sistema
                 $motivo = $expl->motivoMantener($lote);
                 $registros[] = ['accion' => 'mantener', 'fc' => $inf['fc_principal']];
             } elseif ($principal === null) {
-                $motivo = $expl->motivoSinAccion($lote);
+                $motivo = $expl->motivoSinAccion($lote, $inf, $stockTotal);
                 $alertas = [];   // el motivo ya explica el caso
             }
 
@@ -267,8 +309,10 @@ final class Sistema
                         $motivoCompra = $expl->motivoCompra($lote, $inf, $gramos, $c, $objetivo);
                         array_push($motivo, ...$motivoCompra);
                         $motivos['comprar'] = $motivoCompra;
-                        $items[] = ['cantidad' => 'Comprar ≈ ' . Explicador::peso($gramos), 'nombre' => $lote['insumo'], 'nota' => '',
-                                    'dia' => 1, 'accion' => 'comprar'];
+                        $cobTxt = $c['cobertura_dias'] < 1 ? 'menos de un día' : number_format($c['cobertura_dias'], 1, '.', '') . ' días';
+                        $items[] = ['cantidad' => 'Comprar ≈ ' . Explicador::peso($gramos), 'nombre' => $lote['insumo'],
+                                    'nota' => 'el stock alcanza para ' . $cobTxt, 'dia' => 1, 'accion' => 'comprar',
+                                    'finde' => in_array('R21', array_column($inf['traza'], 'regla'), true)];
                         $registros[] = ['accion' => 'comprar', 'fc' => $inf['acciones']['comprar'], 'dia_plan' => 1, 'costo' => $gramos * $costoG];
                         $principal ??= 'comprar';
                     }
@@ -316,13 +360,50 @@ final class Sistema
             ];
         }
 
+        $todos = $resultados;
+        if ($sel !== []) {
+            $resultados = array_values(array_filter($todos, static fn(array $r): bool => in_array($r['lote']['insumo_id'], $sel, true)));
+        }
+
+        // Emergencia pedida para insumos que no tienen nada que venza hoy: explicar y sugerir el plan de 3 días
+        $avisos = [];
+        if ($tipo === 'emergencia' && $sel !== []) {
+            $enResultado = array_map(static fn(array $r): int => $r['lote']['insumo_id'], $resultados);
+            foreach ($sel as $id) {
+                if (in_array($id, $enResultado, true)) {
+                    continue;
+                }
+                $vidas = array_column(array_filter($lotes, static fn(array $l): bool => $l['insumo_id'] === $id), 'dias_vida');
+                $nombre = $grafo->nombreInsumo($id);
+                if ($vidas === []) {
+                    $avisos[] = ['insumo_id' => $id, 'sugerir_plan' => false,
+                        'texto' => "{$nombre} no tiene stock registrado, así que no hay nada que rescatar."];
+                } else {
+                    $min = min($vidas);
+                    $cuando = $min === 1 ? 'mañana' : "en {$min} días";
+                    $avisos[] = ['insumo_id' => $id, 'sugerir_plan' => true,
+                        'texto' => "El menú de emergencia es solo para lotes que vencen hoy o ya vencieron, y {$nombre} "
+                                 . "vence {$cuando} (hoy no corre riesgo). Para planear su uso en los próximos días, "
+                                 . 'haga una consulta de plan de 3 días.'];
+                }
+            }
+        }
+
         return [
+            'avisos'      => $avisos,
+            'insumos_sel' => array_map(static fn(int $id): string => $grafo->nombreInsumo($id), $sel),
             'consulta_id' => $consultaId,
             'fecha'       => $hoy,
             'tipo'        => $tipo,
             'tipos_dia'   => $tipos,
             'resultados'  => $resultados,
             'plan_dias'   => $tipo === 'plan_3_dias' ? self::armarPlanDias($resultados, $tipos, $ventas) : [],
+            'menu_dias'   => $tipo === 'plan_3_dias' ? PlanMenu::construir($grafo, $demanda, $fechas, $tipos, $todos, $par, $soloPlatos) : [],
+            'modelo_demanda' => [
+                'platos' => $demanda->platosConRegresion(), 'dias' => $demanda->diasUsados(),
+                'detalle' => array_map(static fn(int $id, string $n): array => ['plato' => $n] + ($demanda->resumen($id) ?? []),
+                    array_keys($grafo->platos()), array_values($grafo->platos())),
+            ],
             'ahorro_total' => round(array_sum(array_column($resultados, 'ahorro')), 2),
         ];
     }
@@ -386,6 +467,18 @@ final class Sistema
         foreach ($dias as &$d) {
             usort($d['bloques'], static fn(array $a, array $b): int =>
                 [$orden[$a['accion']], $a['lote']['insumo']] <=> [$orden[$b['accion']], $b['lote']['insumo']]);
+
+            // Todas las compras del día van en UNA lista, no en una tarjeta por insumo
+            $compras = array_values(array_filter($d['bloques'], static fn(array $b): bool => $b['accion'] === 'comprar'));
+            if ($compras !== []) {
+                $d['bloques'] = array_values(array_filter($d['bloques'], static fn(array $b): bool => $b['accion'] !== 'comprar'));
+                $d['bloques'][] = [
+                    'accion' => 'comprar', 'lote' => null,
+                    'items'  => array_merge(...array_map(static fn(array $b): array => $b['items'], $compras)),
+                    'finde'  => in_array(true, array_merge(...array_map(
+                        static fn(array $b): array => array_column($b['items'], 'finde'), $compras)), true),
+                ];
+            }
         }
         unset($d);
         return array_values($dias);

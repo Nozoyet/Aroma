@@ -2,14 +2,14 @@
 declare(strict_types=1);
 
 /**
- * Motor de inferencia: aplica las reglas R1 a R22 a un lote, con encadenamiento hacia adelante
+ * Motor de inferencia: aplica las reglas R1 a R26 a un lote, con encadenamiento hacia adelante
  * y factores de certeza (FC).
  *
  * - La LÓGICA de cada regla está aquí (funciones PHP).
  * - El FC de cada regla y su estado activa/inactiva vienen de la tabla `regla`.
  * - Los umbrales vienen de `parametro_politica`.
  * - Las reglas se evalúan por fases. Una fase solo depende de las anteriores, así que
- *   una pasada por fase basta (no hay ciclos). Dentro de una fase se respeta el orden R1..R22.
+ *   una pasada por fase basta (no hay ciclos). Dentro de una fase se respeta el orden de definición.
  *
  * Contexto que recibe inferir() en $ctx:
  *   'cobertura_dias'    float|INF   cobertura del insumo del lote (vw_cobertura_insumo)
@@ -133,7 +133,7 @@ final class MotorReglas
                 . ' sin regla de descarte: revisar manualmente.';
         }
         if ($h->es('riesgo_merma', 'alto')
-            && !isset($acciones['descartar'], $acciones['menu_emergencia'], $acciones['promocionar'])) {
+            && !isset($acciones['descartar']) && !isset($acciones['menu_emergencia']) && !isset($acciones['promocionar'])) {
             $alertas[] = 'Lote en riesgo de merma sin acción posible (estado visual '
                 . $h->valor('estado_visual') . '): validar con el chef.';
         }
@@ -144,7 +144,7 @@ final class MotorReglas
     }
 
     // ------------------------------------------------------------------
-    // DEFINICIÓN DE LAS REGLAS R1 A R22 (coinciden con la tabla `regla`)
+    // DEFINICIÓN DE LAS REGLAS R1 A R26 (coinciden con la tabla `regla`)
     // ------------------------------------------------------------------
 
     private function definirReglas(): array
@@ -184,6 +184,11 @@ final class MotorReglas
             'R8' => ['fase' => 'inocuidad', 'eval' => fn(Hechos $h, array $x) =>
                 $h->es('estado_visual', 'malo') ? $c('apto_consumo', 'no', ['estado_visual']) : null],
 
+            // R24: cubre el hueco de lotes vencidos de riesgo bajo (antes no tenían regla de descarte)
+            'R24' => ['fase' => 'inocuidad', 'eval' => fn(Hechos $h, array $x) =>
+                $h->es('estado_lote', 'vencido') && $h->es('categoria_riesgo', 'bajo')
+                    ? $c('apto_consumo', 'no', ['estado_lote', 'categoria_riesgo']) : null],
+
             // ---- Calidad del lote (el valor del hecho ES la certeza de calidad) ----
             'R9'  => ['fase' => 'calidad', 'eval' => fn(Hechos $h, array $x) =>
                 $h->es('estado_lote', 'fresco') && $buena($h)
@@ -193,6 +198,16 @@ final class MotorReglas
                     ? $c('fc_calidad', 0.7, ['estado_lote', 'estado_visual', 'cadena_frio']) : null],
             'R11' => ['fase' => 'calidad', 'eval' => fn(Hechos $h, array $x) =>
                 $h->es('estado_lote', 'vence_hoy') && $buena($h)
+                    ? $c('fc_calidad', 0.5, ['estado_lote', 'estado_visual', 'cadena_frio']) : null],
+
+            // R23: estado visual "regular" en un lote con tiempo: calidad en el límite del umbral de promoción
+            'R23' => ['fase' => 'calidad', 'eval' => fn(Hechos $h, array $x) =>
+                ($h->es('estado_lote', 'fresco') || $h->es('estado_lote', 'por_vencer'))
+                && $h->es('estado_visual', 'regular') && $h->es('cadena_frio', 'cumple')
+                    ? $c('fc_calidad', 0.6, ['estado_lote', 'estado_visual', 'cadena_frio']) : null],
+            // R26: estado visual "regular" y vence hoy: calidad en el límite del umbral de emergencia
+            'R26' => ['fase' => 'calidad', 'eval' => fn(Hechos $h, array $x) =>
+                $h->es('estado_lote', 'vence_hoy') && $h->es('estado_visual', 'regular') && $h->es('cadena_frio', 'cumple')
                     ? $c('fc_calidad', 0.5, ['estado_lote', 'estado_visual', 'cadena_frio']) : null],
 
             // ---- Riesgo de merma ----
@@ -246,6 +261,10 @@ final class MotorReglas
                 array_intersect($h->valor('tipo_dia'), ['fin_de_semana', 'feriado']) !== []
                 && $h->valor('cobertura_dias') < 2
                     ? $c('accion_recomendada', 'comprar', ['tipo_dia', 'cobertura_dias']) : null],
+            // R25: el lote se consumirá antes de vencer, pero el stock alcanza para menos de un día: reponer
+            'R25' => ['fase' => 'acciones', 'eval' => fn(Hechos $h, array $x) =>
+                $h->es('estado_lote', 'por_vencer') && $h->es('apto_consumo', 'si') && $h->valor('cobertura_dias') < 1
+                    ? $c('accion_recomendada', 'comprar', ['estado_lote', 'apto_consumo', 'cobertura_dias']) : null],
             'R22' => ['fase' => 'acciones', 'eval' => fn(Hechos $h, array $x) =>
                 $h->es('riesgo_merma', 'bajo') && $h->valor('cobertura_dias') >= 1
                     ? $c('accion_recomendada', 'mantener', ['riesgo_merma', 'cobertura_dias']) : null],

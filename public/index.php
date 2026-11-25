@@ -57,7 +57,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             'observaciones' => trim((string)($_POST['observaciones'] ?? '')),
             'tipo_dia'      => is_array($_POST['tipo_dia'] ?? null) ? $_POST['tipo_dia'] : [],
             'lotes'         => is_array($_POST['lote'] ?? null) ? $_POST['lote'] : [],
-            'nuevo_lote'    => is_array($_POST['nuevo'] ?? null) ? $_POST['nuevo'] : [],
+            'nuevos_lotes'  => is_array($_POST['nuevo'] ?? null) ? array_values($_POST['nuevo']) : [],
+            'insumos'       => is_array($_POST['insumos'] ?? null) ? array_values($_POST['insumos']) : [],
         ];
         $_SESSION['resultado'] = (new Sistema(new Repositorio()))->ejecutar($entrada, $hoy);
         $_SESSION['resultado_hora'] = date('H:i');
@@ -145,6 +146,29 @@ function tarjeta(array $r, bool $grande = false): void
     </article>
 <?php }
 
+/** Todas las compras del día en una sola tarjeta. */
+function tarjeta_compras(array $b): void
+{ ?>
+    <article class="tarjeta a-comprar">
+      <header>
+        <span class="etq">Comprar</span>
+        <h3>Lista de compras</h3>
+      </header>
+      <ul class="items">
+        <?php foreach ($b['items'] as $i): ?>
+          <li><span class="cant"><?= e($i['cantidad']) ?></span>
+              <span class="nom"><?= e($i['nombre']) ?></span>
+              <span class="sec nota"><?= e($i['nota']) ?></span></li>
+        <?php endforeach; ?>
+      </ul>
+      <div class="porque">
+        <h4>¿Por qué?</h4>
+        <p>Estos insumos tienen stock para menos de 2 días de ventas<?= $b['finde'] ? ', y hoy o mañana hay fin de semana o feriado, cuando se vende más' : '' ?>.
+           Las cantidades alcanzan para cubrir unos 2 días.</p>
+      </div>
+    </article>
+<?php }
+
 /** Lista compacta para lo que no requiere acción. */
 function lista_compacta(array $rs): void
 { ?>
@@ -204,7 +228,8 @@ function lista_compacta(array $rs): void
   th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid rgba(166,95,25,.35); white-space: nowrap; }
   th { color: var(--sec); font-weight: 600; font-size: .8rem; text-transform: uppercase; letter-spacing: .06em; }
   tr:last-child td { border-bottom: 0; }
-  .urgente { color: var(--sub); font-weight: 600; }
+  .urgente { color: var(--sub); font-weight: 600; border-color: var(--sub); }
+  .ayuda { color: var(--sec); font-size: .85rem; margin: 10px 0 0; }
   .acciones { margin-top: 24px; }
 
   .error { border: 1px solid var(--alerta); color: var(--titulo); background: rgba(192,80,63,.12);
@@ -248,6 +273,25 @@ function lista_compacta(array $rs): void
   .tarjeta.grande .metricas dd { font-size: 1.3rem; color: var(--sub); }
 
   /* secciones opcionales */
+  .compra-dia { margin: 14px 0 0; color: var(--sec); }
+  .compra-dia strong { color: var(--sub); }
+  .chk { display: inline-flex; align-items: center; gap: 6px; background: var(--fondo); border: 1px solid rgba(166,95,25,.5);
+         border-radius: 999px; padding: 6px 14px; color: var(--titulo); cursor: pointer; }
+  .chk input { accent-color: var(--sub); }
+  .nuevo-fila { margin-bottom: 10px; }
+  .aviso { background: var(--caja); border: 1px solid var(--sub); border-radius: 12px; padding: 16px 20px; margin: 0 0 16px; }
+  .aviso p { margin: 0 0 12px; color: var(--titulo); }
+  .aviso .btn { display: inline-block; }
+  .menu-dia { margin-bottom: 16px; }
+  .menu-dia h2 { margin-top: 0; }
+  table.menu { width: 100%; border-collapse: collapse; margin-top: 8px; }
+  table.menu th { text-align: left; color: var(--sub); font-size: .8rem; font-weight: 600; padding: 8px 8px; border-bottom: 1px solid var(--linea); }
+  table.menu td { padding: 10px 8px; border-bottom: 1px solid rgba(166,95,25,.3); vertical-align: top; }
+  table.menu .num { text-align: right; white-space: nowrap; }
+  table.menu .prep { color: var(--sub); font-size: 1.25rem; font-weight: 700; }
+  table.menu tr.tot td { border-bottom: 0; font-weight: 600; color: var(--titulo); }
+  .etq-rojo { color: #C0503F; border-color: #C0503F; }
+  .subdia { color: var(--sub); font-size: .8rem; letter-spacing: .08em; text-transform: uppercase; margin: 20px 0 8px; }
   .opcional { background: var(--caja); border: 1px solid rgba(166,95,25,.45); border-radius: 12px; padding: 12px 20px; margin: 0 0 12px; }
   .opcional > summary { font-size: 1rem; }
   .opcional > summary strong { color: var(--titulo); }
@@ -279,10 +323,21 @@ function lista_compacta(array $rs): void
     <section class="caja" style="margin-top:24px">
       <h2>1. ¿Qué quieres consultar?</h2>
       <div class="fila">
-        <label class="opcion"><input type="radio" name="tipo" value="plan_3_dias" checked>
+        <label class="opcion"><input type="radio" name="tipo" value="plan_3_dias" <?= ($_GET['tipo'] ?? '') !== 'emergencia' ? 'checked' : '' ?>>
           <strong>Plan de 3 días</strong><small>Revisa todos los lotes y propone qué hacer con cada uno.</small></label>
-        <label class="opcion"><input type="radio" name="tipo" value="emergencia">
+        <label class="opcion"><input type="radio" name="tipo" value="emergencia" <?= ($_GET['tipo'] ?? '') === 'emergencia' ? 'checked' : '' ?>>
           <strong>Emergencia</strong><small>Solo lotes que vencen hoy o ya vencidos.</small></label>
+      </div>
+    </section>
+
+    <section class="caja" style="margin-top:16px">
+      <h2>Insumos a priorizar (opcional)</h2>
+      <p class="ayuda" style="margin:0 0 10px">Sin marcar nada se analizan todos los insumos. Si marcas uno (por ejemplo Lengua de res), el menú
+        se arma solo con los platos que lo usan; los demás ingredientes se toman del stock sin que tengas que elegirlos.</p>
+      <div class="fila">
+        <?php $vistos = []; foreach ($lotes as $l): if (isset($vistos[$l['insumo_id']])) { continue; } $vistos[$l['insumo_id']] = true; ?>
+          <label class="chk"><input type="checkbox" name="insumos[]" value="<?= e($l['insumo_id']) ?>" <?= in_array((string)$l['insumo_id'], array_map('strval', (array)($_GET['insumos'] ?? [])), true) ? 'checked' : '' ?>> <?= e($l['insumo']) ?></label>
+        <?php endforeach; ?>
       </div>
     </section>
 
@@ -306,7 +361,8 @@ function lista_compacta(array $rs): void
               <td class="sec"><?= e($id) ?></td>
               <td><?= e($l['insumo']) ?></td>
               <td class="sec"><?= e($l['categoria_riesgo']) ?></td>
-              <td class="<?= $l['dias_vida'] <= 0 ? 'urgente' : 'sec' ?>"><?= e(str_replace('vence ', '', vida($l['dias_vida']))) ?></td>
+              <td><input type="date" class="<?= $l['dias_vida'] <= 0 ? 'urgente' : '' ?>" name="lote[<?= e($id) ?>][vence]"
+                         value="<?= e(date('Y-m-d', strtotime($hoy . ' ' . ($l['dias_vida'] >= 0 ? '+' : '') . $l['dias_vida'] . ' day'))) ?>" required></td>
               <td><input type="number" name="lote[<?= e($id) ?>][stock]" min="0" step="0.01" value="<?= e($l['stock_actual']) ?>" required></td>
               <td><select name="lote[<?= e($id) ?>][visual]"><?= opciones(TXT_VISUAL, $l['estado_visual']) ?></select></td>
               <td><select name="lote[<?= e($id) ?>][frio]"><?= opciones(TXT_FRIO, $l['cadena_frio']) ?></select></td>
@@ -314,29 +370,46 @@ function lista_compacta(array $rs): void
           <?php endforeach; ?>
         </table>
       </div>
+      <p class="ayuda">Puedes corregir la fecha de vencimiento y el stock (por ejemplo, tras un recuento). Si el stock sube por encima de la cantidad inicial del lote, esa cantidad se actualiza.</p>
     </section>
 
     <section class="caja" style="margin-top:16px">
       <h2>4. ¿Llegó mercadería nueva? (opcional)</h2>
-      <div class="fila">
-        <label class="dia">Insumo
-          <select name="nuevo[insumo_id]"><option value="">— ninguno —</option>
-            <?php foreach ($insumos as $id => $i): ?><option value="<?= e($id) ?>"><?= e($i['nombre']) ?></option><?php endforeach; ?>
-          </select></label>
-        <label class="dia">Vence <input type="date" name="nuevo[fecha_vencimiento]" min="<?= e($hoy) ?>"></label>
-        <label class="dia">Cantidad (g) <input type="number" name="nuevo[cantidad]" min="0" step="0.01"></label>
-        <label class="dia">Estado <select name="nuevo[visual]"><?= opciones(TXT_VISUAL, 'bueno') ?></select></label>
-        <label class="dia">Cadena de frío <select name="nuevo[frio]"><?= opciones(TXT_FRIO, 'cumple') ?></select></label>
+      <div id="nuevos">
+        <div class="fila nuevo-fila">
+          <label class="dia">Insumo
+            <select name="nuevo[0][insumo_id]"><option value="">— ninguno —</option>
+              <?php foreach ($insumos as $id => $i): ?><option value="<?= e($id) ?>"><?= e($i['nombre']) ?></option><?php endforeach; ?>
+            </select></label>
+          <label class="dia">Vence <input type="date" name="nuevo[0][fecha_vencimiento]" min="<?= e($hoy) ?>"></label>
+          <label class="dia">Cantidad (g) <input type="number" name="nuevo[0][cantidad]" min="0" step="0.01"></label>
+          <label class="dia">Estado <select name="nuevo[0][visual]"><?= opciones(TXT_VISUAL, 'bueno') ?></select></label>
+          <label class="dia">Cadena de frío <select name="nuevo[0][frio]"><?= opciones(TXT_FRIO, 'cumple') ?></select></label>
+        </div>
       </div>
+      <p><button type="button" class="btn btn-sec" id="mas-lotes">+ Agregar otro lote</button></p>
+      <script>
+        (function () {
+          var cont = document.getElementById('nuevos'), n = 1;
+          document.getElementById('mas-lotes').addEventListener('click', function () {
+            var fila = cont.firstElementChild.cloneNode(true);
+            fila.querySelectorAll('[name]').forEach(function (c) {
+              c.name = c.name.replace(/nuevo\[\d+\]/, 'nuevo[' + n + ']');
+              if (c.tagName === 'INPUT') { c.value = ''; } else { c.selectedIndex = 0; }
+            });
+            n++; cont.appendChild(fila);
+          });
+        })();
+      </script>
     </section>
 
-    <section class="caja" style="margin-top:16px">
+   <!-- <section class="caja" style="margin-top:16px">
       <h2>5. Observaciones (opcional)</h2>
       <textarea name="observaciones" rows="2" maxlength="300"></textarea>
-    </section>
+    </section>-->
 
     <div class="acciones"><button class="btn" type="submit">Consultar al sistema</button></div>
-  </form>
+  </form> 
 
 <?php else: ?>
   <!-- ======================= PANTALLA 2: RESULTADOS ======================= -->
@@ -364,7 +437,32 @@ function lista_compacta(array $rs): void
   </div>
 
   <?php if ($error !== null): ?><div class="error"><?= e($error) ?></div><?php endif; ?>
+  <?php foreach ($resultado['avisos'] ?? [] as $av): ?>
+    <div class="aviso">
+      <p><?= e($av['texto']) ?></p>
+      <?php if ($av['sugerir_plan']): ?>
+        <a class="btn" href="<?= e($ruta) ?>?tipo=plan_3_dias&amp;insumos[]=<?= e($av['insumo_id']) ?>">Consultar plan de 3 días</a>
+      <?php endif; ?>
+    </div>
+  <?php endforeach; ?>
+  <?php if (!empty($resultado['insumos_sel'])): ?>
+    <p class="sec">Insumos analizados: <strong><?= e(implode(', ', $resultado['insumos_sel'])) ?></strong></p>
+  <?php endif; ?>
 
+  <?php if ($resultado['menu_dias'] !== []):
+      $totalPlan = array_sum(array_column($resultado['menu_dias'], 'total_porciones'));
+      $ingresoPlan = array_sum(array_column($resultado['menu_dias'], 'ingreso'));
+      $nPromo = 0; $nCompra = 0;
+      foreach ($resultado['menu_dias'] as $md) { $nCompra += count($md['comprar']); foreach ($md['platos'] as $pl) { $nPromo += $pl['promo'] > 0 ? 1 : 0; } } ?>
+  <div class="resumen">
+    <div><strong><?= e($totalPlan) ?></strong>porciones esperadas en 3 días</div>
+    <div><strong><?= e($nPromo) ?></strong>promociones</div>
+    <?php if ($nCompra > 0): ?><div><strong><?= e($nCompra) ?></strong>compras para cubrir el menú</div><?php endif; ?>
+    <?php if ($resultado['ahorro_total'] > 0): ?>
+      <div><strong><?= e(Explicador::bs((float)$resultado['ahorro_total'])) ?></strong>de ahorro estimado</div>
+    <?php endif; ?>
+  </div>
+  <?php else: ?>
   <div class="resumen">
     <div><strong><?= count($emergencia) ?></strong>menú de emergencia</div>
     <div><strong><?= $cuenta($otras, 'descartar') ?></strong>por descartar</div>
@@ -375,12 +473,46 @@ function lista_compacta(array $rs): void
     <?php endif; ?>
   </div>
 
-  <?php if ($resultado['plan_dias'] !== []): ?>
+  <?php endif; ?>
+
+  <?php if ($resultado['menu_dias'] !== []): ?>
+    <?php foreach ($resultado['menu_dias'] as $i => $m):
+        $f = new DateTimeImmutable($m['fecha']);
+        $finde = in_array($m['tipo_dia'], ['fin_de_semana', 'feriado'], true);
+        $pd = $resultado['plan_dias'][$i] ?? ['etiqueta' => 'Día ' . $m['dia'], 'vencen' => []]; ?>
+      <section class="caja menu-dia">
+        <h2>Día <?= e($m['dia']) ?> · <?= e($pd['etiqueta']) ?> · <?= e(DIAS_ES[(int)$f->format('N')] . ' ' . $f->format('d/m')) ?>
+          · <?= e(strtolower(TXT_TIPO_DIA[$m['tipo_dia']] ?? $m['tipo_dia'])) ?><?= $finde ? ' (se vende más)' : '' ?></h2>
+        <?php if ($pd['vencen'] !== []): ?>
+          <p class="vencen sec">Vencen <?= $m['dia'] === 1 ? 'hoy' : e(strtolower($pd['etiqueta'])) ?>:
+            <?php foreach ($pd['vencen'] as $k => $v): ?><?= $k > 0 ? ' · ' : '' ?><strong><?= e($v['insumo']) ?></strong> (<?= e(Explicador::peso($v['gramos'])) ?>)<?php endforeach; ?></p>
+        <?php endif; ?>
+        <table class="menu">
+          <tr><th>Plato</th><th class="num">Se espera vender</th><th>Promoción</th></tr>
+          <?php foreach ($m['platos'] as $pl): ?>
+            <tr>
+              <td><strong><?= e($pl['nombre']) ?></strong>
+                <?php if ($pl['emergencia'] > 0): ?><br><span class="sec nota">Conviene usar hoy el lote que vence: hasta <?= e($pl['emergencia']) ?> porciones</span><?php endif; ?></td>
+              <td class="num prep"><?= e($pl['esperadas']) ?></td>
+              <td><?php if ($pl['promo'] > 0): ?><span class="etq">−<?= e(round($pl['descuento'] * 100)) ?> %</span> <?= e($pl['promo']) ?> porciones<?php else: ?><span class="sec">—</span><?php endif; ?></td>
+            </tr>
+          <?php endforeach; ?>
+        </table>
+        <?php if ($m['comprar'] !== []): ?>
+          <p class="compra-dia"><strong>Comprar para este menú:</strong>
+            <?php foreach ($m['comprar'] as $k => $c): ?><?= $k > 0 ? ' · ' : ' ' ?><?= e($c['insumo']) ?> ≈ <?= e(Explicador::peso($c['gramos'])) ?><?php endforeach; ?></p>
+        <?php endif; ?>
+      </section>
+    <?php endforeach; ?>
+
+
+    <details class="opcional" open>
+      <summary><strong>Avisos de inventario</strong> · descartes, compras y lotes por vencer</summary>
     <?php foreach ($resultado['plan_dias'] as $d):
         $f = new DateTimeImmutable($d['fecha']);
         $finde = in_array($d['tipo_dia'], ['fin_de_semana', 'feriado'], true); ?>
-      <h2>Día <?= e($d['dia']) ?> · <?= e($d['etiqueta']) ?> · <?= e(DIAS_ES[(int)$f->format('N')] . ' ' . $f->format('d/m')) ?>
-        · <?= e(strtolower(TXT_TIPO_DIA[$d['tipo_dia']] ?? $d['tipo_dia'])) ?><?= $finde ? ' (se vende más)' : '' ?></h2>
+      <h3 class="subdia">Día <?= e($d['dia']) ?> · <?= e($d['etiqueta']) ?> · <?= e(DIAS_ES[(int)$f->format('N')] . ' ' . $f->format('d/m')) ?>
+        · <?= e(strtolower(TXT_TIPO_DIA[$d['tipo_dia']] ?? $d['tipo_dia'])) ?><?= $finde ? ' (se vende más)' : '' ?></h3>
 
       <?php if ($d['vencen'] !== []): ?>
         <p class="vencen sec">Vencen <?= $d['dia'] === 1 ? 'hoy o ya vencidos' : e(strtolower($d['etiqueta'])) ?>:
@@ -390,21 +522,26 @@ function lista_compacta(array $rs): void
         </p>
       <?php endif; ?>
 
-      <?php foreach ($d['bloques'] as $b) { tarjeta($b, $b['accion'] === 'menu_emergencia'); } ?>
+      <?php foreach ($d['bloques'] as $b) { $b['lote'] === null ? tarjeta_compras($b) : tarjeta($b, $b['accion'] === 'menu_emergencia'); } ?>
       <?php if ($d['bloques'] === []): ?>
         <p class="vacio">Sin acciones nuevas este día: seguir con las ventas normales.</p>
       <?php endif; ?>
-      <?php if ($d['ventas'] !== []): ?>
-        <details class="opcional">
-          <summary><strong>Ventas esperadas</strong> · promedio de los últimos meses para este día de la semana</summary>
-          <ul class="compacta">
-            <?php foreach ($d['ventas'] as $v): ?>
-              <li><strong><?= e($v['porciones']) ?></strong> <span class="sec">porciones de</span> <?= e($v['plato']) ?></li>
-            <?php endforeach; ?>
-          </ul>
-        </details>
-      <?php endif; ?>
     <?php endforeach; ?>
+    </details>
+    <details class="opcional">
+      <summary><strong>Cómo se calcularon las ventas esperadas</strong> · mínimos cuadrados sobre <?= e($resultado['modelo_demanda']['dias']) ?> días</summary>
+      <p class="sec">Para cada plato se ajusta una recta de tendencia más el efecto de cada día de la semana. «Se espera vender» es esa estimación; el chef decide cuánto preparar. Las promociones son porciones adicionales que el sistema propone para no perder lotes por vencer.</p>
+      <table class="menu">
+        <tr><th>Plato</th><th class="num">Tendencia</th><th class="num">Ajuste</th></tr>
+        <?php foreach ($resultado['modelo_demanda']['detalle'] as $dt): ?>
+          <tr><td><?= e($dt['plato']) ?></td>
+            <?php if (isset($dt['pendiente'])): ?>
+              <td class="num"><?= $dt['pendiente'] >= 0 ? '+' : '' ?><?= e(number_format($dt['pendiente'], 2)) ?> porciones por día</td>
+              <td class="num"><?= e(round($dt['r2'] * 100)) ?> % de la variación explicada</td>
+            <?php else: ?><td class="num sec" colspan="2">pocos datos: promedio por día de la semana</td><?php endif; ?></tr>
+        <?php endforeach; ?>
+      </table>
+    </details>
   <?php else: ?>
   <?php if ($emergencia !== []): ?>
     <h2>Menú de emergencia · ingredientes que vencen hoy</h2>
@@ -416,7 +553,7 @@ function lista_compacta(array $rs): void
     <?php foreach ($otras as $r) { tarjeta($r); } ?>
   <?php endif; ?>
 
-  <?php if ($emergencia === [] && $otras === []): ?>
+  <?php if ($emergencia === [] && $otras === [] && empty($resultado['avisos'])): ?>
     <h2>Resultado</h2>
     <p class="vacio">No hay nada urgente: ningún lote necesita menú de emergencia, promoción, compra o descarte.</p>
   <?php endif; ?>

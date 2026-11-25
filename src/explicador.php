@@ -207,6 +207,14 @@ final class Explicador
         return $frases;
     }
 
+    /** Aviso adicional cuando la calidad del lote se infirió con estado visual "regular" (R23/R26). */
+    public function notaCalidad(array $inf): array
+    {
+        $ids = array_column($inf['traza'], 'regla');
+        return array_intersect(['R23', 'R26'], $ids) === [] ? []
+            : ['Su estado visual es regular, por eso la confianza es menor: confirme con el chef antes de usarlo.'];
+    }
+
     public function motivoDescarte(array $lote, array $inf): array
     {
         $ids = array_column($inf['traza'], 'regla');
@@ -215,6 +223,7 @@ final class Explicador
             'R6' => 'ya venció y es un producto de riesgo medio',
             'R7' => 'no se mantuvo la cadena de frío en un producto de riesgo alto',
             'R8' => 'su estado visual es malo',
+            'R24' => 'ya venció',
         ];
         $razones = [];
         foreach ($mapa as $id => $texto) {
@@ -246,8 +255,15 @@ final class Explicador
             : "{$lote['insumo']} vence en {$d} día(s), pero con las ventas normales se consume antes. No hace falta hacer nada."];
     }
 
-    public function motivoSinAccion(array $lote): array
+    public function motivoSinAccion(array $lote, array $inf = [], array $stockTotal = []): array
     {
+        // Lote en riesgo de sobrar, pero ningún plato se puede preparar en cantidad suficiente
+        if (($inf['hechos']['riesgo_merma']['valor'] ?? null) === 'alto' && $lote['dias_vida'] >= 0) {
+            $falta = $this->limitante($lote['insumo_id'], $stockTotal);
+            return ["{$lote['insumo']} está en riesgo de sobrar, pero con los demás ingredientes que hay no se pueden preparar "
+                    . 'suficientes platos para aprovecharlo ni para promocionarlo.',
+                    $falta ? "Falta sobre todo {$falta}: reponerlo permitiría aprovechar este lote." : 'Revise el stock de los demás ingredientes.'];
+        }
         if ($lote['dias_vida'] < 0) {
             return ["Este lote de {$lote['insumo']} ya venció y el sistema no tiene una regla para decidir qué hacer con productos de riesgo {$lote['categoria_riesgo']}.",
                     'Revíselo manualmente.'];

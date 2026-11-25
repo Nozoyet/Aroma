@@ -5,7 +5,7 @@ declare(strict_types=1);
  * Repositorio simulado en memoria: permite probar Sistema completo sin MySQL.
  * Replica lo que hacen las vistas (dias_vida ya viene fijo en los datos de ejemplo).
  */
-final class RepositorioMemoria extends Repositorio
+class RepositorioMemoria extends Repositorio
 {
     public array $decisiones = [];
     public array $reglasDecision = [];
@@ -40,7 +40,7 @@ final class RepositorioMemoria extends Repositorio
         return $salida;
     }
 
-    private function consumoDiario(): array
+    protected function consumoDiario(): array
     {
         $prom = [1 => 12, 2 => 6, 3 => 16, 4 => 9, 5 => 7, 6 => 18];
         $c = [];
@@ -110,6 +110,11 @@ final class RepositorioMemoria extends Repositorio
         return $lista;
     }
 
+    public function serieVentas(string $hasta, int $dias = 180): array
+    {
+        return [];   // sin serie: la demanda cae al promedio de respaldo
+    }
+
     public function estadisticasDemanda(string $hasta, int $dias = 90): array
     {
         $prom = [1 => 12, 2 => 6, 3 => 16, 4 => 9, 5 => 7, 6 => 18];
@@ -132,10 +137,15 @@ final class RepositorioMemoria extends Repositorio
         $this->calendario[$fecha] = $tipoDia;
     }
 
-    public function actualizarLote(int $loteId, float $stock, string $estadoVisual, bool $cadenaFrioCumple): void
+    public string $hoy = '2026-11-19';
+
+    public function actualizarLote(int $loteId, float $stock, string $estadoVisual, bool $cadenaFrioCumple, ?string $fechaVencimiento = null): void
     {
         foreach ($this->datosLotes as &$l) {
             if ($l['lote_id'] === $loteId) {
+                if ($fechaVencimiento !== null) {
+                    $l['dias_vida'] = (int)(new DateTimeImmutable($this->hoy))->diff(new DateTimeImmutable($fechaVencimiento))->format('%r%a');
+                }
                 $l['stock_actual'] = $stock;
                 $l['estado_visual'] = $estadoVisual;
                 $l['cadena_frio'] = $cadenaFrioCumple ? 'cumple' : 'no_cumple';
