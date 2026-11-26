@@ -61,6 +61,44 @@ final class DemandaMinimosCuadrados implements IDemanda
         return $m === null ? null : ['pendiente' => $m['b'][1], 'r2' => $m['r2'], 'n' => $m['n']];
     }
 
+    /**
+     * Serie para graficar la demanda de un plato: ventas reales, ajuste del modelo, tendencia y pronóstico.
+     * La ventana va de ($hoy - $atras) a ($hoy + $adelante - 1); los días desde $hoy en adelante son pronóstico.
+     *
+     * - real:      porciones vendidas (null si ese día no tiene registro, por ejemplo un feriado)
+     * - ajuste:    lo que predice el modelo con el efecto del día de la semana
+     * - tendencia: recta sin el efecto semanal (nivel promedio de la semana), muestra si la demanda sube o baja
+     *
+     * @return array{dias: array<int, array{fecha: string, real: ?float, ajuste: float, tendencia: float, futuro: bool}>,
+     *               s: float, pendiente: float, r2: float}|null  null si el plato usa el modelo de respaldo
+     */
+    public function proyeccion(int $platoId, string $hoy, int $atras = 28, int $adelante = 7): ?array
+    {
+        $m = $this->modelo($platoId);
+        if ($m === null) {
+            return null;
+        }
+        $reales = [];
+        foreach ($this->series[$platoId] ?? [] as [$fecha, $y]) {
+            $reales[$fecha] = (float)$y;
+        }
+        $efectoMedio = array_sum(array_slice($m['b'], 2)) / 7.0;   // el lunes vale 0
+        $dias = [];
+        $inicio = new DateTimeImmutable($hoy);
+        for ($i = -$atras; $i < $adelante; $i++) {
+            $fecha = $inicio->modify(($i >= 0 ? '+' : '') . "{$i} day")->format('Y-m-d');
+            $t = (float)($this->dia($fecha) - $m['t0']);
+            $dias[] = [
+                'fecha'     => $fecha,
+                'real'      => $reales[$fecha] ?? null,
+                'ajuste'    => max(0.0, $this->predecir($m, $fecha)),
+                'tendencia' => max(0.0, $m['b'][0] + $m['b'][1] * $t + $efectoMedio),
+                'futuro'    => $i >= 0,
+            ];
+        }
+        return ['dias' => $dias, 's' => $m['s'], 'pendiente' => $m['b'][1], 'r2' => $m['r2']];
+    }
+
     /** Días de historial que usa el modelo con más datos. */
     public function diasUsados(): int
     {

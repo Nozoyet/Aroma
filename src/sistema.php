@@ -20,6 +20,7 @@ final class Sistema
     private const VISUAL    = ['bueno', 'regular', 'malo'];
     private const FRIO      = ['cumple', 'no_cumple'];
     private const VENTANA_HISTORIAL_DIAS = 90;    // respaldo: promedio por día de la semana
+    private const MAX_GRAFICAS = 6;                  // gráficos de demanda por consulta
     private const VENTANA_REGRESION_DIAS = 180;   // mínimos cuadrados: 6 meses de historial
 
     public function __construct(private Repositorio $repo)
@@ -405,7 +406,67 @@ final class Sistema
                     array_keys($grafo->platos()), array_values($grafo->platos())),
             ],
             'ahorro_total' => round(array_sum(array_column($resultados, 'ahorro')), 2),
+            'graficas_demanda' => $tipo === 'plan_3_dias' ? $this->graficasDemanda($grafo, $demanda, $lotes, $sel, $hoy, $horizonte) : [],
         ];
+    }
+
+    /**
+     * Series para los gráficos de demanda del chef: una por insumo (gramos por día) y, dentro de cada una,
+     * el aporte de cada plato que lo usa. Incluye ventas reales, ajuste, tendencia y pronóstico de 7 días.
+     * Si el usuario eligió insumos se grafican esos; si no, los que tienen algún lote por vencer en el horizonte.
+     *
+     * @param int[] $sel
+     * @return array<int, array>
+     */
+    private function graficasDemanda(Grafo $grafo, DemandaMinimosCuadrados $demanda, array $lotes, array $sel, string $hoy, int $horizonte): array
+    {
+        $ids = $sel;
+        if ($ids === []) {
+            $riesgo = [];
+            foreach ($lotes as $l) {
+                if ($l['dias_vida'] <= $horizonte && $l['stock_actual'] > 0) {
+                    $riesgo[$l['insumo_id']] = min($riesgo[$l['insumo_id']] ?? PHP_INT_MAX, $l['dias_vida']);
+                }
+            }
+            asort($riesgo);
+            $ids = array_slice(array_keys($riesgo), 0, self::MAX_GRAFICAS);
+        }
+        $salida = [];
+        foreach ($ids as $insumoId) {
+            $dias = [];
+            $platos = [];
+            $varianza = 0.0;
+            $pendiente = 0.0;
+            $completos = [];
+            foreach ($grafo->vecinos($insumoId) as $platoId => $peso) {
+                $p = $demanda->proyeccion($platoId, $hoy);
+                if ($p === null) {
+                    continue;   // plato con pocos datos: no tiene regresión que graficar
+                }
+                $platos[] = ['plato_id' => $platoId, 'nombre' => $grafo->nombrePlato($platoId), 'peso' => $peso, 'serie' => $p];
+                $varianza  += ($peso * $p['s']) ** 2;
+                $pendiente += $peso * $p['pendiente'];
+                foreach ($p['dias'] as $i => $d) {
+                    $dias[$i] ??= ['fecha' => $d['fecha'], 'real' => 0.0, 'ajuste' => 0.0, 'tendencia' => 0.0, 'futuro' => $d['futuro']];
+                    $dias[$i]['ajuste']    += $peso * $d['ajuste'];
+                    $dias[$i]['tendencia'] += $peso * $d['tendencia'];
+                    $dias[$i]['real'] = ($dias[$i]['real'] === null || $d['real'] === null) ? null : $dias[$i]['real'] + $peso * $d['real'];
+                }
+                $completos[] = $platoId;
+            }
+            if ($platos === []) {
+                continue;
+            }
+            $salida[] = [
+                'insumo_id' => $insumoId,
+                'insumo'    => $grafo->nombreInsumo($insumoId),
+                'dias'      => array_values($dias),
+                's'         => sqrt($varianza),               // error típico combinado (g)
+                'pendiente' => $pendiente,                    // g por día
+                'platos'    => $platos,
+            ];
+        }
+        return $salida;
     }
 
     /**
