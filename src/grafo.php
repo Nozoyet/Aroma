@@ -38,6 +38,12 @@ final class Grafo
         return array_map(static fn(array $p): string => $p['nombre'], $this->platos);
     }
 
+    /** Todos los insumos con receta: [insumo_id => nombre]. */
+    public function insumos(): array
+    {
+        return array_map(static fn(array $i): string => $i['nombre'], $this->insumos);
+    }
+
     /** Platos que usan el insumo: [plato_id => gramos por porción]. */
     public function vecinos(int $insumoId): array
     {

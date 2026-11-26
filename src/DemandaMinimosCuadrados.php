@@ -69,10 +69,10 @@ final class DemandaMinimosCuadrados implements IDemanda
      * - ajuste:    lo que predice el modelo con el efecto del día de la semana
      * - tendencia: recta sin el efecto semanal (nivel promedio de la semana), muestra si la demanda sube o baja
      *
-     * @return array{dias: array<int, array{fecha: string, real: ?float, ajuste: float, tendencia: float, futuro: bool}>,
+     * @return array{dias: array<int, array{fecha: string, real: ?float, ajuste: float, tendencia: float, sd: float, futuro: bool}>,
      *               s: float, pendiente: float, r2: float}|null  null si el plato usa el modelo de respaldo
      */
-    public function proyeccion(int $platoId, string $hoy, int $atras = 28, int $adelante = 7): ?array
+    public function proyeccion(int $platoId, string $hoy, int $atras = 28, int $adelante = 30): ?array
     {
         $m = $this->modelo($platoId);
         if ($m === null) {
@@ -93,10 +93,97 @@ final class DemandaMinimosCuadrados implements IDemanda
                 'real'      => $reales[$fecha] ?? null,
                 'ajuste'    => max(0.0, $this->predecir($m, $fecha)),
                 'tendencia' => max(0.0, $m['b'][0] + $m['b'][1] * $t + $efectoMedio),
+                'sd'        => $this->desvioPrediccion($m, $this->fila($fecha, $m['t0'])),
                 'futuro'    => $i >= 0,
             ];
         }
         return ['dias' => $dias, 's' => $m['s'], 'pendiente' => $m['b'][1], 'r2' => $m['r2']];
+    }
+
+    /**
+     * Perspectiva semanal de un plato para decidir si conviene mantenerlo: promedio diario de cada semana
+     * (las pasadas con ventas reales, las futuras con el modelo) y un veredicto de la tendencia.
+     * Cada semana futura trae un margen que crece con la distancia, porque extrapolar la recta es cada vez menos seguro.
+     *
+     * @return array{semanas: array<int, array{desde: string, real: ?float, esperado: float, sd: float, futuro: bool}>,
+     *               reciente: float, proximo: float, cambio: ?float, t: float, s: float, r2: float, n: int}|null
+     */
+    public function perspectiva(int $platoId, string $hoy, int $semanasAtras = 8, int $semanasAdelante = 4): ?array
+    {
+        $m = $this->modelo($platoId);
+        if ($m === null) {
+            return null;
+        }
+        $reales = [];
+        foreach ($this->series[$platoId] ?? [] as [$fecha, $y]) {
+            $reales[$fecha] = (float)$y;
+        }
+        $inicio = new DateTimeImmutable($hoy);
+        $semanas = [];
+        for ($k = -$semanasAtras; $k < $semanasAdelante; $k++) {
+            $suma = 0.0; $cuenta = 0; $pred = 0.0; $xm = array_fill(0, self::P, 0.0);
+            for ($d = 0; $d < 7; $d++) {
+                $fecha = $inicio->modify(($k * 7 + $d >= 0 ? '+' : '') . ($k * 7 + $d) . ' day')->format('Y-m-d');
+                if (isset($reales[$fecha]) && $k < 0) {
+                    $suma += $reales[$fecha];
+                    $cuenta++;
+                }
+                $x = $this->fila($fecha, $m['t0']);
+                $pred += max(0.0, $this->producto($m['b'], $x));
+                foreach ($x as $i => $xi) {
+                    $xm[$i] += $xi / 7.0;
+                }
+            }
+            $futuro = $k >= 0;
+            $semanas[] = [
+                'desde'    => $inicio->modify(($k * 7 >= 0 ? '+' : '') . ($k * 7) . ' day')->format('Y-m-d'),
+                'real'     => (!$futuro && $cuenta >= 4) ? $suma / $cuenta : null,   // semanas con pocos días de datos no se promedian
+                'esperado' => $pred / 7.0,
+                // promedio de 7 días: el ruido diario se reparte, queda sobre todo la incertidumbre de la recta
+                'sd'       => $futuro ? $m['s'] * sqrt($this->formaCuadratica($m, $xm) + 1.0 / 7.0) : 0.0,
+                'futuro'   => $futuro,
+            ];
+        }
+        $recientes = array_filter(array_column(array_filter($semanas, static fn(array $w): bool => !$w['futuro']), 'real'),
+            static fn($v): bool => $v !== null);
+        $recientes = array_slice(array_values($recientes), -4);
+        $reciente = $recientes === [] ? 0.0 : array_sum($recientes) / count($recientes);
+        $futuras  = array_column(array_filter($semanas, static fn(array $w): bool => $w['futuro']), 'esperado');
+        $proximo  = $futuras === [] ? 0.0 : array_sum($futuras) / count($futuras);
+
+        // ¿La pendiente es distinta de cero o es ruido? t = b1 / error estándar de b1
+        $e1 = array_fill(0, self::P, 0.0);
+        $e1[1] = 1.0;
+        $z = $this->resolver($m['A'], $e1);
+        $se = $z === null ? 0.0 : $m['s'] * sqrt(max(0.0, $z[1]));
+        return [
+            'semanas'  => $semanas,
+            'reciente' => $reciente,
+            'proximo'  => $proximo,
+            'cambio'   => $reciente > 0 ? ($proximo / $reciente - 1) * 100 : null,
+            't'        => $se > 0 ? $m['b'][1] / $se : 0.0,
+            's'        => $m['s'], 'r2' => $m['r2'], 'n' => $m['n'],
+        ];
+    }
+
+    /** Desvío de una predicción de un día: ruido diario + incertidumbre de los coeficientes (crece al alejarse del historial). */
+    private function desvioPrediccion(array $m, array $x): float
+    {
+        return $m['s'] * sqrt(1.0 + $this->formaCuadratica($m, $x));
+    }
+
+    /** xᵀ(XᵀX)⁻¹x: cuánto pesa la incertidumbre de los coeficientes en ese punto. */
+    private function formaCuadratica(array $m, array $x): float
+    {
+        $z = $this->resolver($m['A'], $x);
+        if ($z === null) {
+            return 0.0;
+        }
+        $q = 0.0;
+        foreach ($x as $i => $xi) {
+            $q += $xi * $z[$i];
+        }
+        return max(0.0, $q);
     }
 
     /** Días de historial que usa el modelo con más datos. */
@@ -158,7 +245,7 @@ final class DemandaMinimosCuadrados implements IDemanda
             $sst += ($y - $media) ** 2;
         }
         return [
-            'b' => $b, 't0' => $t0, 'n' => $n,
+            'b' => $b, 't0' => $t0, 'n' => $n, 'A' => $A,
             's' => sqrt($sse / max(1, $n - self::P)),
             'r2' => $sst > 0.0 ? 1.0 - $sse / $sst : 0.0,
         ];

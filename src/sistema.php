@@ -20,7 +20,7 @@ final class Sistema
     private const VISUAL    = ['bueno', 'regular', 'malo'];
     private const FRIO      = ['cumple', 'no_cumple'];
     private const VENTANA_HISTORIAL_DIAS = 90;    // respaldo: promedio por día de la semana
-    private const MAX_GRAFICAS = 6;                  // gráficos de demanda por consulta
+    private const DIAS_PRONOSTICO = 30;              // el gráfico llega a un mes; la vista puede mostrar solo los primeros 7
     private const VENTANA_REGRESION_DIAS = 180;   // mínimos cuadrados: 6 meses de historial
 
     public function __construct(private Repositorio $repo)
@@ -406,22 +406,59 @@ final class Sistema
                     array_keys($grafo->platos()), array_values($grafo->platos())),
             ],
             'ahorro_total' => round(array_sum(array_column($resultados, 'ahorro')), 2),
-            'graficas_demanda' => $tipo === 'plan_3_dias' ? $this->graficasDemanda($grafo, $demanda, $lotes, $sel, $hoy, $horizonte) : [],
+            'carta' => $tipo === 'plan_3_dias' ? $this->perspectivaCarta($grafo, $demanda, $hoy) : [],
+            'pronosticos' => $tipo === 'plan_3_dias' ? $this->pronosticos($grafo, $demanda, $lotes, $sel, $hoy, $horizonte) : ['series' => [], 'defecto' => 0],
         ];
     }
 
     /**
-     * Series para los gráficos de demanda del chef: una por insumo (gramos por día) y, dentro de cada una,
-     * el aporte de cada plato que lo usa. Incluye ventas reales, ajuste, tendencia y pronóstico de 7 días.
-     * Si el usuario eligió insumos se grafican esos; si no, los que tienen algún lote por vencer en el horizonte.
+     * Perspectiva a un mes de cada plato (¿conviene mantenerlo en la carta?).
+     * Veredicto de tendencia: la pendiente cuenta solo si es claramente distinta de cero (|t| > 2) y mueve la venta ≥ 3 %.
+     * Nivel de venta: lugar del plato entre los demás según las porciones diarias esperadas el próximo mes.
+     *
+     * @return array<int, array>  ordenado de mayor a menor venta esperada
+     */
+    private function perspectivaCarta(Grafo $grafo, DemandaMinimosCuadrados $demanda, string $hoy): array
+    {
+        $lista = [];
+        foreach ($grafo->platos() as $platoId => $nombre) {
+            $p = $demanda->perspectiva($platoId, $hoy);
+            if ($p === null) {
+                continue;   // pocos datos: sin regresión no hay proyección a un mes
+            }
+            $cambio = $p['cambio'];
+            $tendencia = 'estable';
+            if ($cambio !== null && $p['t'] > 2.0 && $cambio >= 3.0) {
+                $tendencia = 'crece';
+            } elseif ($cambio !== null && $p['t'] < -2.0 && $cambio <= -3.0) {
+                $tendencia = 'baja';
+            }
+            $lista[] = ['plato_id' => $platoId, 'plato' => $nombre, 'tendencia' => $tendencia] + $p;
+        }
+        usort($lista, static fn(array $a, array $b): int => $b['proximo'] <=> $a['proximo']);
+        $n = count($lista);
+        foreach ($lista as $i => &$fila) {
+            $fila['puesto'] = $i + 1;
+            $fila['de'] = $n;
+            $fila['nivel'] = $i < $n / 3 ? 'alto' : ($i < 2 * $n / 3 ? 'medio' : 'bajo');
+        }
+        unset($fila);
+        return $lista;
+    }
+
+    /**
+     * Series para el selector de pronóstico del chef: una por insumo (gramos por día) y una por plato (porciones por día).
+     * Cada serie trae 28 días de historia y 30 de pronóstico: ventas reales (r), lo normal de cada día (a), tendencia (t),
+     * desvío de la predicción (sd) y si es futuro (u). Los insumos elegidos por el usuario, o los que tienen un lote por vencer
+     * en el horizonte, van primero y quedan preseleccionados.
      *
      * @param int[] $sel
-     * @return array<int, array>
+     * @return array{series: array<int, array>, defecto: int}
      */
-    private function graficasDemanda(Grafo $grafo, DemandaMinimosCuadrados $demanda, array $lotes, array $sel, string $hoy, int $horizonte): array
+    private function pronosticos(Grafo $grafo, DemandaMinimosCuadrados $demanda, array $lotes, array $sel, string $hoy, int $horizonte): array
     {
-        $ids = $sel;
-        if ($ids === []) {
+        $prioridad = $sel;
+        if ($prioridad === []) {
             $riesgo = [];
             foreach ($lotes as $l) {
                 if ($l['dias_vida'] <= $horizonte && $l['stock_actual'] > 0) {
@@ -429,44 +466,67 @@ final class Sistema
                 }
             }
             asort($riesgo);
-            $ids = array_slice(array_keys($riesgo), 0, self::MAX_GRAFICAS);
+            $prioridad = array_keys($riesgo);
         }
-        $salida = [];
-        foreach ($ids as $insumoId) {
-            $dias = [];
-            $platos = [];
-            $varianza = 0.0;
-            $pendiente = 0.0;
-            $completos = [];
+        $dia = static fn(string $f, ?float $r, float $a, float $t, float $sd, bool $u, int $dec): array => [
+            'f' => $f, 'r' => $r === null ? null : round($r, $dec), 'a' => round($a, $dec), 't' => round($t, $dec),
+            'sd' => round($sd, $dec), 'u' => $u,
+        ];
+
+        $porInsumo = [];
+        foreach ($grafo->insumos() as $insumoId => $nombre) {
+            $dias = []; $varianza = 0.0; $pendiente = 0.0; $platos = [];
             foreach ($grafo->vecinos($insumoId) as $platoId => $peso) {
-                $p = $demanda->proyeccion($platoId, $hoy);
+                $p = $demanda->proyeccion($platoId, $hoy, 28, self::DIAS_PRONOSTICO);
                 if ($p === null) {
-                    continue;   // plato con pocos datos: no tiene regresión que graficar
+                    continue;   // pocos datos: no hay regresión que proyectar
                 }
-                $platos[] = ['plato_id' => $platoId, 'nombre' => $grafo->nombrePlato($platoId), 'peso' => $peso, 'serie' => $p];
+                $platos[] = $grafo->nombrePlato($platoId);
                 $varianza  += ($peso * $p['s']) ** 2;
                 $pendiente += $peso * $p['pendiente'];
                 foreach ($p['dias'] as $i => $d) {
-                    $dias[$i] ??= ['fecha' => $d['fecha'], 'real' => 0.0, 'ajuste' => 0.0, 'tendencia' => 0.0, 'futuro' => $d['futuro']];
-                    $dias[$i]['ajuste']    += $peso * $d['ajuste'];
-                    $dias[$i]['tendencia'] += $peso * $d['tendencia'];
-                    $dias[$i]['real'] = ($dias[$i]['real'] === null || $d['real'] === null) ? null : $dias[$i]['real'] + $peso * $d['real'];
+                    $dias[$i] ??= ['f' => $d['fecha'], 'r' => 0.0, 'a' => 0.0, 't' => 0.0, 'sd2' => 0.0, 'u' => $d['futuro']];
+                    $dias[$i]['a']   += $peso * $d['ajuste'];
+                    $dias[$i]['t']   += $peso * $d['tendencia'];
+                    $dias[$i]['sd2'] += ($peso * $d['sd']) ** 2;   // platos independientes
+                    $dias[$i]['r']    = ($dias[$i]['r'] === null || $d['real'] === null) ? null : $dias[$i]['r'] + $peso * $d['real'];
                 }
-                $completos[] = $platoId;
             }
             if ($platos === []) {
                 continue;
             }
-            $salida[] = [
-                'insumo_id' => $insumoId,
-                'insumo'    => $grafo->nombreInsumo($insumoId),
-                'dias'      => array_values($dias),
-                's'         => sqrt($varianza),               // error típico combinado (g)
-                'pendiente' => $pendiente,                    // g por día
-                'platos'    => $platos,
+            $porInsumo[$insumoId] = [
+                'tipo' => 'insumo', 'id' => $insumoId, 'nombre' => $nombre, 'unidad' => 'g', 'pendiente' => round($pendiente, 2),
+                's' => round(sqrt($varianza), 1), 'platos' => $platos,
+                'dias' => array_values(array_map(static fn(array $d): array => $dia($d['f'], $d['r'], $d['a'], $d['t'], sqrt($d['sd2']), $d['u'], 0), $dias)),
             ];
         }
-        return $salida;
+
+        $series = [];
+        foreach ($prioridad as $id) {                       // 1) insumos en riesgo o elegidos
+            if (isset($porInsumo[$id])) {
+                $series[] = ['grupo' => 'Insumos con lotes por vencer o elegidos'] + $porInsumo[$id];
+                unset($porInsumo[$id]);
+            }
+        }
+        uasort($porInsumo, static fn(array $a, array $b): int => strcmp($a['nombre'], $b['nombre']));
+        foreach ($porInsumo as $x) {                         // 2) demás insumos
+            $series[] = ['grupo' => 'Otros insumos'] + $x;
+        }
+        $platosOrden = $grafo->platos();
+        asort($platosOrden);
+        foreach ($platosOrden as $platoId => $nombre) {      // 3) platos
+            $p = $demanda->proyeccion($platoId, $hoy, 28, self::DIAS_PRONOSTICO);
+            if ($p === null) {
+                continue;
+            }
+            $series[] = [
+                'grupo' => 'Platos', 'tipo' => 'plato', 'id' => $platoId, 'nombre' => $nombre, 'unidad' => 'porciones',
+                'pendiente' => round($p['pendiente'], 4), 's' => round($p['s'], 2), 'platos' => [],
+                'dias' => array_map(static fn(array $d): array => $dia($d['fecha'], $d['real'], $d['ajuste'], $d['tendencia'], $d['sd'], $d['futuro'], 2), $p['dias']),
+            ];
+        }
+        return ['series' => $series, 'defecto' => 0];   // la primera serie es la preseleccionada
     }
 
     /**

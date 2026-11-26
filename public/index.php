@@ -181,128 +181,78 @@ function lista_compacta(array $rs): void
     </ul>
 <?php }
 
-/**
- * Gráfico de demanda en SVG (sin librerías): ventas reales, modelo, tendencia y pronóstico con su rango.
- * @param array $dias  [['fecha','real','ajuste','tendencia','futuro'], ...]
- */
-function grafico_demanda(array $dias, float $s, string $unidad, string $titulo): string
+/** Gráfico semanal (promedio por día de cada semana): 8 semanas pasadas y 4 de pronóstico. */
+function grafico_semanal(array $semanas, string $titulo): string
 {
-    $n = count($dias);
-    if ($n < 2) {
-        return '';
-    }
-    $W = 720; $H = 290; $ml = 56; $mr = 16; $mt = 16; $mb = 34;
+    $n = count($semanas);
+    $W = 720; $H = 260; $ml = 52; $mr = 16; $mt = 22; $mb = 34;
     $x = static fn(int $i): float => $ml + $i * ($W - $ml - $mr) / ($n - 1);
     $max = 0.0;
-    foreach ($dias as $d) {
-        $max = max($max, (float)($d['real'] ?? 0), $d['ajuste'] + ($d['futuro'] ? $s : 0), $d['tendencia']);
-    }
+    foreach ($semanas as $w) { $max = max($max, (float)($w['real'] ?? 0), $w['esperado'] + $w['sd']); }
     $paso = 1.0;
-    foreach ([1, 2, 5, 10, 20, 25, 50, 100, 200, 250, 500, 1000, 2000, 2500, 5000, 10000] as $c) {
-        $paso = (float)$c;
-        if ($max / $paso <= 5) { break; }
-    }
-    $tope = max($paso, ceil($max * 1.05 / $paso) * $paso);
+    foreach ([1, 2, 5, 10, 20, 25, 50] as $c) { $paso = (float)$c; if ($max / $paso <= 5) { break; } }
+    $tope = max($paso, ceil($max * 1.08 / $paso) * $paso);
     $y = static fn(float $v): float => $mt + ($H - $mt - $mb) * (1 - $v / $tope);
     $hoyIdx = 0;
-    foreach ($dias as $i => $d) { if ($d['futuro']) { $hoyIdx = $i; break; } }
+    foreach ($semanas as $i => $w) { if ($w['futuro']) { $hoyIdx = $i; break; } }
+    $xl = $x($hoyIdx) - ($x(1) - $x(0)) / 2;   // el límite cae entre la última semana pasada y la primera futura
 
     $o = '<svg viewBox="0 0 ' . $W . ' ' . $H . '" role="img" aria-label="' . e($titulo) . '" class="grafico">';
     for ($v = 0.0; $v <= $tope + 1e-9; $v += $paso) {
         $o .= '<line x1="' . $ml . '" x2="' . ($W - $mr) . '" y1="' . round($y($v), 1) . '" y2="' . round($y($v), 1) . '" class="g-rej"/>';
         $o .= '<text x="' . ($ml - 8) . '" y="' . round($y($v) + 4, 1) . '" class="g-eje" text-anchor="end">' . e(number_format($v, 0, ',', ' ')) . '</text>';
     }
-    $o .= '<text x="' . $ml . '" y="11" class="g-eje">' . e($unidad) . ' por día</text>';
-    foreach ($dias as $i => $d) {
-        if (($i - $hoyIdx) % 7 === 0) {
-            $f = new DateTimeImmutable($d['fecha']);
-            $o .= '<text x="' . round($x($i), 1) . '" y="' . ($H - 10) . '" class="g-eje" text-anchor="middle">' . e($f->format('d/m')) . '</text>';
+    $o .= '<text x="' . $ml . '" y="12" class="g-eje">porciones por día (promedio de la semana)</text>';
+    foreach ($semanas as $i => $w) {
+        if ($i % 2 === ($hoyIdx % 2)) {
+            $o .= '<text x="' . round($x($i), 1) . '" y="' . ($H - 10) . '" class="g-eje" text-anchor="middle">' . e((new DateTimeImmutable($w['desde']))->format('d/m')) . '</text>';
         }
     }
-    $o .= '<rect x="' . round($x($hoyIdx), 1) . '" y="' . $mt . '" width="' . round($W - $mr - $x($hoyIdx), 1) . '" height="' . ($H - $mt - $mb) . '" class="g-fut"/>';
+    $o .= '<rect x="' . round($xl, 1) . '" y="' . $mt . '" width="' . round($W - $mr - $xl, 1) . '" height="' . ($H - $mt - $mb) . '" class="g-fut"/>';
     $alto = $bajo = [];
-    foreach ($dias as $i => $d) {
-        if ($d['futuro']) {
-            $alto[] = round($x($i), 1) . ',' . round($y($d['ajuste'] + $s), 1);
-            $bajo[] = round($x($i), 1) . ',' . round($y(max(0.0, $d['ajuste'] - $s)), 1);
+    foreach ($semanas as $i => $w) {
+        if ($w['futuro']) {
+            $alto[] = round($x($i), 1) . ',' . round($y($w['esperado'] + $w['sd']), 1);
+            $bajo[] = round($x($i), 1) . ',' . round($y(max(0.0, $w['esperado'] - $w['sd'])), 1);
         }
     }
     $o .= '<polygon points="' . implode(' ', array_merge($alto, array_reverse($bajo))) . '" class="g-banda"/>';
-    $o .= '<line x1="' . round($x($hoyIdx), 1) . '" x2="' . round($x($hoyIdx), 1) . '" y1="' . $mt . '" y2="' . ($H - $mb) . '" class="g-hoy"/>';
-    $o .= '<text x="' . round($x($hoyIdx) - 7, 1) . '" y="' . ($mt + 12) . '" class="g-eje g-et" text-anchor="end">← lo que ya se vendió</text>';
-    $o .= '<text x="' . round($x($hoyIdx) + 7, 1) . '" y="' . ($mt + 12) . '" class="g-eje g-et">hoy: pronóstico →</text>';
-    $pt = static fn(array $lista, callable $f): string => implode(' ', array_map(static fn(int $i): string => round($x($i), 1) . ',' . round($f($lista[$i]), 1), array_keys($lista)));
-    $o .= '<polyline points="' . $pt($dias, fn($d) => $y($d['tendencia'])) . '" class="g-tend"/>';
-    $o .= '<text x="' . ($ml + 6) . '" y="' . round($y($dias[0]['tendencia']) - 9, 1) . '" class="g-eje g-et g-et-tend">tendencia</text>';
-    $pasado = array_slice($dias, 0, $hoyIdx, true);
-    $o .= '<polyline points="' . $pt($pasado, fn($d) => $y($d['ajuste'])) . '" class="g-mod"/>';
-    $futuro = array_slice($dias, max(0, $hoyIdx - 1), null, true);
-    $o .= '<polyline points="' . $pt($futuro, fn($d) => $y($d['ajuste'])) . '" class="g-pron"/>';
+    $o .= '<line x1="' . round($xl, 1) . '" x2="' . round($xl, 1) . '" y1="' . $mt . '" y2="' . ($H - $mb) . '" class="g-hoy"/>';
+    $o .= '<text x="' . round($xl - 7, 1) . '" y="' . ($mt + 12) . '" class="g-eje g-et" text-anchor="end">← semanas vendidas</text>';
+    $o .= '<text x="' . round($xl + 7, 1) . '" y="' . ($mt + 12) . '" class="g-eje g-et">próximas 4 semanas →</text>';
+    $pt = static fn(array $lista): string => implode(' ', array_map(static fn(int $i): string => round($x($i), 1) . ',' . round($y($lista[$i]['esperado']), 1), array_keys($lista)));
+    $o .= '<polyline points="' . $pt(array_slice($semanas, 0, $hoyIdx, true)) . '" class="g-mod"/>';
+    $o .= '<polyline points="' . $pt(array_slice($semanas, max(0, $hoyIdx - 1), null, true)) . '" class="g-pron"/>';
     $tramo = [];
-    foreach ($dias as $i => $d) {
-        if ($d['real'] !== null && !$d['futuro']) {
-            $tramo[] = round($x($i), 1) . ',' . round($y((float)$d['real']), 1);
-        } else {
-            if (count($tramo) > 1) { $o .= '<polyline points="' . implode(' ', $tramo) . '" class="g-real"/>'; }
-            $tramo = [];
-        }
+    foreach ($semanas as $i => $w) {
+        if ($w['real'] !== null) { $tramo[] = round($x($i), 1) . ',' . round($y((float)$w['real']), 1); }
     }
     if (count($tramo) > 1) { $o .= '<polyline points="' . implode(' ', $tramo) . '" class="g-real"/>'; }
-    foreach ($dias as $i => $d) {
-        if ($d['real'] !== null && !$d['futuro']) {
-            $o .= '<circle cx="' . round($x($i), 1) . '" cy="' . round($y((float)$d['real']), 1) . '" r="3.4" class="g-punto"><title>'
-                . e((new DateTimeImmutable($d['fecha']))->format('d/m') . ': ' . number_format((float)$d['real'], 0, ',', ' ') . ' ' . $unidad) . '</title></circle>';
+    foreach ($semanas as $i => $w) {
+        if ($w['real'] !== null) {
+            $o .= '<circle cx="' . round($x($i), 1) . '" cy="' . round($y((float)$w['real']), 1) . '" r="4" class="g-punto"><title>Semana del '
+                . e((new DateTimeImmutable($w['desde']))->format('d/m') . ': ' . number_format((float)$w['real'], 1, ',', ' ') . ' porciones por día') . '</title></circle>';
         }
     }
     return $o . '</svg>';
 }
 
-/** Bloque completo de un gráfico: leyenda, lectura en palabras y tabla de los próximos días. */
-function bloque_demanda(string $nombre, array $dias, float $s, float $pendienteDia, bool $esGramos): void
+/** Veredicto en palabras del chef para un plato de la carta. @return array{0: string, 1: string, 2: string} etiqueta, clase, recomendación */
+function veredicto_carta(array $f): array
 {
-    $fmt = static fn(float $v): string => $esGramos ? Explicador::peso($v) : number_format($v, 1, ',', ' ') . ' porc.';
-    $futuros = array_values(array_filter($dias, static fn(array $d): bool => $d['futuro']));
-    $reales  = array_values(array_filter($dias, static fn(array $d): bool => !$d['futuro'] && $d['real'] !== null));
-    $promFut = $futuros === [] ? 0.0 : array_sum(array_column($futuros, 'ajuste')) / count($futuros);
-    $promRec = $reales === [] ? 0.0 : array_sum(array_column($reales, 'real')) / count($reales);
-    $cambio  = $promRec > 0 ? ($promFut / $promRec - 1) * 100 : null;
-    $semana  = $pendienteDia * 7;
-    $ultimo  = $reales === [] ? null : (new DateTimeImmutable(end($reales)['fecha']))->format('d/m');
-    ?>
-    <div class="demanda">
-      <?= grafico_demanda($dias, $s, $esGramos ? 'g' : 'porciones', 'Demanda de ' . $nombre) ?>
-      <?php $cosa = $esGramos ? 'gramos de ' . $nombre : 'porciones de ' . $nombre; ?>
-      <div class="leyenda">
-        <div><i class="l-real"></i><h4>Lo que se vendió</h4>
-          <p>Cada punto dorado es un día real, en <?= e($cosa) ?>. Si falta un punto, ese día no tiene ventas registradas (feriado o sin datos).</p></div>
-        <div><i class="l-mod"></i><h4>Lo normal para cada día</h4>
-          <p>Línea gris: lo que el sistema espera según el día de la semana. Sube los viernes y sábados y baja entre semana. Un punto lejos de esta línea fue un día fuera de lo normal.</p></div>
-        <div><i class="l-tend"></i><h4>Tendencia</h4>
-          <p>Línea verde: el promedio de la semana sin los altibajos de cada día. Si sube, el consumo está creciendo; si baja, está cayendo.</p></div>
-        <div><i class="l-pron"></i><h4>Pronóstico</h4>
-          <p>Línea punteada, de hoy en adelante: lo que se espera vender. La banda sombreada es el margen en que probablemente caiga la venta real.</p></div>
-      </div>
-      <p class="uso"><strong>Cómo usarlo:</strong> para decidir cuánto preparar o comprar, guíese por la línea punteada. El borde de arriba de la banda sirve de margen de seguridad si no quiere quedarse corto.</p>
-      <p class="lectura">
-        La tendencia es <strong><?= $semana >= 0 ? 'de crecimiento' : 'a la baja' ?></strong>:
-        <?= $semana >= 0 ? '+' : '−' ?><?= e($fmt(abs($semana))) ?> por semana.
-        En los próximos 7 días se esperan en promedio <strong><?= e($fmt($promFut)) ?> por día</strong><?php if ($cambio !== null): ?>,
-        <?= abs($cambio) < 1 ? 'casi igual' : e(number_format(abs($cambio), 0)) . ' % ' . ($cambio > 0 ? 'más' : 'menos') ?> que el promedio de los últimos 28 días con ventas (<?= e($fmt($promRec)) ?> por día)<?php endif; ?>.
-        El pronóstico puede variar unos ±<?= e($fmt($s)) ?> por día.
-        <?php if ($ultimo !== null): ?><span class="sec">Última venta registrada: <?= e($ultimo) ?>.</span><?php endif; ?>
-      </p>
-      <details class="tec"><summary>Ver el pronóstico día por día</summary>
-        <table class="menu">
-          <tr><th>Día</th><th class="num">Esperado</th><th class="num">Rango probable</th></tr>
-          <?php foreach ($futuros as $d): $f = new DateTimeImmutable($d['fecha']); ?>
-            <tr><td><?= e(DIAS_ES[(int)$f->format('N')] . ' ' . $f->format('d/m')) ?></td>
-                <td class="num"><strong><?= e($fmt($d['ajuste'])) ?></strong></td>
-                <td class="num sec"><?= e($fmt(max(0.0, $d['ajuste'] - $s))) ?> a <?= e($fmt($d['ajuste'] + $s)) ?></td></tr>
-          <?php endforeach; ?>
-        </table>
-      </details>
-    </div>
-<?php }
+    $alto = $f['nivel'] !== 'bajo';
+    return match ($f['tendencia']) {
+        'crece' => ['En crecimiento', 'v-crece', $alto
+            ? 'Conviene mantenerlo en el menú y asegurar su stock: se espera que venda más.'
+            : 'Todavía vende poco, pero va en aumento: conviene mantenerlo y seguir observándolo.'],
+        'baja' => ['A la baja', 'v-baja', $alto
+            ? 'Aún vende bien pero va cayendo: conviene vigilarlo y revisar su precio o presentación.'
+            : 'Vende poco y sigue cayendo: conviene considerar reemplazarlo.'],
+        default => ['Estable', 'v-estable', $alto
+            ? 'Conviene mantenerlo en el menú: vende bien y de forma estable.'
+            : 'Vende poco y sin crecer: conviene evaluar si aporta variedad o margen antes de seguir comprando para él.'],
+    };
+}
 ?>
 <!DOCTYPE html>
 <html lang="es">
@@ -576,6 +526,26 @@ function bloque_demanda(string $nombre, array $dias, float $s, float $pendienteD
   .g-et-tend { fill: #8fc08a; }
   .lectura { margin: 6px 0 8px; }
   .lectura strong { color: var(--sub); }
+  .selector-pron { display: flex; flex-wrap: wrap; align-items: center; gap: 12px 24px; margin: 6px 0 12px; }
+  .selector-pron label { display: flex; align-items: center; gap: 10px; color: var(--sec); }
+  .selector-pron select { min-width: 240px; }
+  .horizonte { display: inline-flex; align-items: center; gap: 8px; font-size: .9rem; }
+  .chip-h[hidden] { display: none; }
+  .chip-h { font: inherit; font-size: .85rem; color: var(--titulo); background: transparent; border: 1px solid rgba(229,164,91,.4); border-radius: 999px; padding: 5px 16px; cursor: pointer; }
+  .chip-h.on { background: linear-gradient(135deg, #edbd76, #cf8443); color: #101713; border-color: transparent; font-weight: 600; }
+  .plato-carta { border-top: 1px solid rgba(229,164,91,.16); padding: 10px 0; }
+  .plato-carta > summary { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 14px; cursor: pointer; color: var(--titulo); }
+  .pc-puesto { display: inline-flex; width: 28px; height: 28px; align-items: center; justify-content: center; border-radius: 50%; background: rgba(229,164,91,.15); color: var(--sub); font-weight: 700; font-size: .85rem; }
+  .pc-nombre { font-family: Georgia, serif; font-size: 1.05rem; flex: 1 1 200px; }
+  .pc-num { color: var(--sec); font-size: .9rem; }
+  .pc-num strong { color: var(--titulo); }
+  .vered { font-size: .72rem; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; border-radius: 999px; padding: 2px 11px; border: 1px solid; }
+  .v-crece { color: #9fd49a; border-color: #9fd49a; }
+  .v-estable { color: var(--sub); border-color: var(--sub); }
+  .v-baja { color: var(--alerta); border-color: var(--alerta); }
+  .plato-carta svg.grafico { margin-top: 12px; }
+  .reco { margin: 4px 0 6px; padding: 10px 14px; background: rgba(229,164,91,.08); border-radius: 10px; color: var(--titulo); }
+  .reco strong { color: var(--sub); }
   @keyframes aroma-entra { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
   @keyframes aroma-pulso { 0%, 100% { transform: translateY(-50%) scale(1); opacity: .9; } 50% { transform: translateY(-50%) scale(1.035); opacity: .68; } }
   @media (max-width: 700px) {
@@ -820,19 +790,64 @@ function bloque_demanda(string $nombre, array $dias, float $s, float $pendienteD
     <?php endforeach; ?>
     </details>
 
-    <?php if (!empty($resultado['graficas_demanda'])): ?>
+    <?php if (!empty($resultado['pronosticos']['series'])): $ps = $resultado['pronosticos']; ?>
     <details class="opcional" open>
-      <summary><strong>Tendencia y pronóstico de la demanda</strong> · cómo cambió lo que se consume de cada insumo y qué se espera esta semana</summary>
-      <p class="sec">Cada gráfico muestra los últimos 28 días de ventas convertidos a gramos de insumo y la proyección de los próximos 7 días,
-        calculada con el mismo modelo de mínimos cuadrados que usa el plan de 3 días.</p>
-      <?php foreach ($resultado['graficas_demanda'] as $g): ?>
-        <h3 class="sub-g"><?= e($g['insumo']) ?> <span class="sec" style="font-size:.9rem">· gramos por día</span></h3>
-        <?php bloque_demanda($g['insumo'], $g['dias'], (float)$g['s'], (float)$g['pendiente'], true); ?>
-        <details class="tec"><summary>Ver por plato (<?= e(implode(', ', array_column($g['platos'], 'nombre'))) ?>)</summary>
-          <?php foreach ($g['platos'] as $p): ?>
-            <h3 class="sub-g"><?= e($p['nombre']) ?> <span class="sec" style="font-size:.9rem">· porciones por día</span></h3>
-            <?php bloque_demanda($p['nombre'], $p['serie']['dias'], (float)$p['serie']['s'], (float)$p['serie']['pendiente'], false); ?>
-          <?php endforeach; ?>
+      <summary><strong>Tendencia y pronóstico de la demanda</strong> · elija un insumo o un plato para ver cómo cambió su consumo y qué se espera</summary>
+      <div class="selector-pron">
+        <label>Ver pronóstico de
+          <select id="pron-sel">
+            <?php $grupo = null; foreach ($ps['series'] as $k => $sr):
+                if ($sr['grupo'] !== $grupo): if ($grupo !== null) { echo '</optgroup>'; } $grupo = $sr['grupo']; echo '<optgroup label="' . e($grupo) . '">'; endif; ?>
+              <option value="<?= e($k) ?>"<?= $k === $ps['defecto'] ? ' selected' : '' ?>><?= e($sr['nombre']) ?></option>
+            <?php endforeach; if ($grupo !== null) { echo '</optgroup>'; } ?>
+          </select></label>
+        <span class="horizonte" role="group" aria-label="Horizonte del pronóstico">
+          <span class="sec">Pronóstico a:</span>
+          <button type="button" class="chip-h on" data-h="7">7 días</button>
+          <button type="button" class="chip-h" data-h="30">30 días</button>
+        </span>
+      </div>
+      <div id="pron-vista" aria-live="polite"></div>
+      <div class="leyenda">
+        <div><i class="l-real"></i><h4>Lo que se vendió</h4>
+          <p>Cada punto dorado es un día real. Si falta un punto, ese día no tiene ventas registradas (feriado o sin datos).</p></div>
+        <div><i class="l-mod"></i><h4>Lo normal para cada día</h4>
+          <p>Línea gris: lo que el sistema espera según el día de la semana. Sube los viernes y sábados y baja entre semana. Un punto lejos de esta línea fue un día fuera de lo normal.</p></div>
+        <div><i class="l-tend"></i><h4>Tendencia</h4>
+          <p>Línea verde: el promedio de la semana sin los altibajos de cada día. Si sube, el consumo está creciendo; si baja, está cayendo.</p></div>
+        <div><i class="l-pron"></i><h4>Pronóstico</h4>
+          <p>Línea punteada, de hoy en adelante: lo que se espera vender. La banda sombreada es el margen en que probablemente caiga la venta real.</p></div>
+      </div>
+      <p class="uso"><strong>Cómo usarlo:</strong> para decidir cuánto preparar o comprar, guíese por la línea punteada. El borde de arriba de la banda sirve de margen de seguridad si no quiere quedarse corto.</p>
+      <script type="application/json" id="pron-datos"><?= json_encode($ps['series'], JSON_UNESCAPED_UNICODE | JSON_HEX_TAG | JSON_HEX_AMP | JSON_PARTIAL_OUTPUT_ON_ERROR) ?></script>
+    </details>
+    <?php endif; ?>
+
+    <?php if (!empty($resultado['carta'])): ?>
+    <details class="opcional">
+      <summary><strong>Perspectiva a un mes: ¿qué platos conviene mantener?</strong> · cómo viene la venta de cada plato y qué se espera las próximas 4 semanas</summary>
+      <p class="sec">Se compara el promedio de porciones por día de las últimas semanas con lo que se espera el próximo mes. Los platos van de mayor a menor venta esperada.
+        Es una guía basada en los últimos 6 meses de ventas: no incluye fiestas, temporadas, cambios de precio ni de carta, y el margen que muestra el gráfico es el del cálculo estadístico (a un mes la incertidumbre real es mayor).</p>
+      <?php foreach ($resultado['carta'] as $f): [$etq, $clase, $reco] = veredicto_carta($f); ?>
+        <details class="plato-carta">
+          <summary>
+            <span class="pc-puesto"><?= e($f['puesto']) ?></span>
+            <strong class="pc-nombre"><?= e($f['plato']) ?></strong>
+            <span class="vered <?= e($clase) ?>"><?= e($etq) ?></span>
+            <span class="pc-num"><?= e(number_format($f['reciente'], 1, ',', ' ')) ?> → <strong><?= e(number_format($f['proximo'], 1, ',', ' ')) ?></strong> porc./día</span>
+          </summary>
+          <?= grafico_semanal($f['semanas'], 'Perspectiva semanal de ' . $f['plato']) ?>
+          <div class="leyenda">
+            <div><i class="l-real"></i><h4>Semanas ya vendidas</h4><p>Cada punto es el promedio de porciones por día de una semana real. Se muestran las últimas 8 semanas.</p></div>
+            <div><i class="l-pron"></i><h4>Próximas 4 semanas</h4><p>Línea punteada y banda: lo que se espera vender por día y su margen estadístico.</p></div>
+          </div>
+          <p class="lectura">
+            <strong><?= e($f['plato']) ?></strong> vende hoy unas <?= e(number_format($f['reciente'], 1, ',', ' ')) ?> porciones por día
+            (promedio de las últimas 4 semanas) y se esperan <strong><?= e(number_format($f['proximo'], 1, ',', ' ')) ?></strong> el próximo mes<?php if ($f['cambio'] !== null): ?>,
+            <?= abs($f['cambio']) < 1 ? 'casi igual' : e(number_format(abs($f['cambio']), 0)) . ' % ' . ($f['cambio'] > 0 ? 'más' : 'menos') ?><?php endif; ?>.
+            Está en el puesto <?= e($f['puesto']) ?> de <?= e($f['de']) ?> en ventas esperadas<?= $f['nivel'] === 'alto' ? ' (de los más vendidos)' : ($f['nivel'] === 'bajo' ? ' (de los menos vendidos)' : '') ?>.
+          </p>
+          <p class="reco"><strong>Recomendación:</strong> <?= e($reco) ?></p>
         </details>
       <?php endforeach; ?>
     </details>
@@ -889,6 +904,108 @@ function bloque_demanda(string $nombre, array $dias, float $s, float $pendienteD
   <div class="acciones" style="margin-top:32px"><a class="btn" href="<?= e($ruta) ?>">← Hacer otra consulta</a></div>
 <?php endif; ?>
 
+<script>
+  // Pronóstico de demanda: se dibuja en el navegador a partir de los datos incrustados, un gráfico a la vez
+  (function () {
+    var el = document.getElementById('pron-datos');
+    if (!el) { return; }
+    var D = JSON.parse(el.textContent), H = 7;
+    var sel = document.getElementById('pron-sel'), cont = document.getElementById('pron-vista');
+    var DIAS = ['dom', 'lun', 'mar', 'mié', 'jue', 'vie', 'sáb'];
+    function esc(t) { return String(t).replace(/[&<>"']/g, function (c) { return {'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'}[c]; }); }
+    function miles(v) { return Math.round(v).toString().replace(/\B(?=(\d{3})+(?!\d))/g, ' '); }
+    function dec(v, n) { return v.toFixed(n).replace('.', ','); }
+    function fecha(f) { var p = f.split('-'); return p[2] + '/' + p[1]; }
+    function dia(f) { var p = f.split('-'); return DIAS[new Date(+p[0], +p[1] - 1, +p[2]).getDay()]; }
+    function fmt(v, g) { return g ? (v >= 1000 ? dec(v / 1000, 2) + ' kg' : miles(v) + ' g') : dec(v, 1) + ' porciones'; }
+    function r1(v) { return Math.round(v * 10) / 10; }
+
+    function svg(it, dias) {
+      var n = dias.length, W = 720, Hh = 290, ml = 56, mr = 16, mt = 16, mb = 34, g = it.unidad === 'g';
+      var X = function (i) { return ml + i * (W - ml - mr) / (n - 1); };
+      var max = 0;
+      dias.forEach(function (d) { max = Math.max(max, d.r || 0, d.a + (d.u ? d.sd : 0), d.t); });
+      var pasos = [0.5, 1, 2, 5, 10, 20, 25, 50, 100, 200, 250, 500, 1000, 2000, 2500, 5000, 10000], paso = pasos[pasos.length - 1];
+      for (var k = 0; k < pasos.length; k++) { if (max / pasos[k] <= 5) { paso = pasos[k]; break; } }
+      var tope = Math.max(paso, Math.ceil(max * 1.05 / paso) * paso);
+      var Y = function (v) { return mt + (Hh - mt - mb) * (1 - v / tope); };
+      var hoy = 0; for (var i = 0; i < n; i++) { if (dias[i].u) { hoy = i; break; } }
+      var cada = n > 45 ? 14 : 7, o = '<svg viewBox="0 0 ' + W + ' ' + Hh + '" role="img" aria-label="' + esc('Demanda de ' + it.nombre) + '" class="grafico">';
+      for (var v = 0; v <= tope + 1e-9; v += paso) {
+        o += '<line x1="' + ml + '" x2="' + (W - mr) + '" y1="' + r1(Y(v)) + '" y2="' + r1(Y(v)) + '" class="g-rej"/>' +
+             '<text x="' + (ml - 8) + '" y="' + r1(Y(v) + 4) + '" class="g-eje" text-anchor="end">' + miles(v) + '</text>';
+      }
+      o += '<text x="' + ml + '" y="11" class="g-eje">' + (g ? 'g' : 'porciones') + ' por día</text>';
+      dias.forEach(function (d, i) {
+        if ((i - hoy) % cada === 0) { o += '<text x="' + r1(X(i)) + '" y="' + (Hh - 10) + '" class="g-eje" text-anchor="middle">' + fecha(d.f) + '</text>'; }
+      });
+      o += '<rect x="' + r1(X(hoy)) + '" y="' + mt + '" width="' + r1(W - mr - X(hoy)) + '" height="' + (Hh - mt - mb) + '" class="g-fut"/>';
+      var alto = [], bajo = [];
+      dias.forEach(function (d, i) { if (d.u) { alto.push(r1(X(i)) + ',' + r1(Y(d.a + d.sd))); bajo.push(r1(X(i)) + ',' + r1(Y(Math.max(0, d.a - d.sd)))); } });
+      o += '<polygon points="' + alto.concat(bajo.reverse()).join(' ') + '" class="g-banda"/>';
+      o += '<line x1="' + r1(X(hoy)) + '" x2="' + r1(X(hoy)) + '" y1="' + mt + '" y2="' + (Hh - mb) + '" class="g-hoy"/>';
+      o += '<text x="' + r1(X(hoy) - 7) + '" y="' + (mt + 12) + '" class="g-eje g-et" text-anchor="end">← lo que ya se vendió</text>';
+      o += '<text x="' + r1(X(hoy) + 7) + '" y="' + (mt + 12) + '" class="g-eje g-et">hoy: pronóstico →</text>';
+      var linea = function (desde, hasta, f) { var p = []; for (var i = desde; i < hasta; i++) { p.push(r1(X(i)) + ',' + r1(Y(f(dias[i])))); } return p.join(' '); };
+      o += '<polyline points="' + linea(0, n, function (d) { return d.t; }) + '" class="g-tend"/>';
+      o += '<text x="' + (ml + 6) + '" y="' + r1(Y(dias[0].t) - 9) + '" class="g-eje g-et g-et-tend">tendencia</text>';
+      o += '<polyline points="' + linea(0, hoy, function (d) { return d.a; }) + '" class="g-mod"/>';
+      o += '<polyline points="' + linea(Math.max(0, hoy - 1), n, function (d) { return d.a; }) + '" class="g-pron"/>';
+      var tramo = [];
+      dias.forEach(function (d, i) {
+        if (d.r !== null && !d.u) { tramo.push(r1(X(i)) + ',' + r1(Y(d.r))); }
+        else { if (tramo.length > 1) { o += '<polyline points="' + tramo.join(' ') + '" class="g-real"/>'; } tramo = []; }
+      });
+      if (tramo.length > 1) { o += '<polyline points="' + tramo.join(' ') + '" class="g-real"/>'; }
+      dias.forEach(function (d, i) {
+        if (d.r !== null && !d.u) {
+          o += '<circle cx="' + r1(X(i)) + '" cy="' + r1(Y(d.r)) + '" r="3.4" class="g-punto"><title>' + fecha(d.f) + ': ' + (g ? miles(d.r) + ' g' : dec(d.r, 0) + ' porciones') + '</title></circle>';
+        }
+      });
+      return o + '</svg>';
+    }
+
+    function dibujar() {
+      var it = D[+sel.value], g = it.unidad === 'g', dias = it.dias;
+      var pasados = dias.filter(function (d) { return !d.u; }).length;
+      var disp = dias.length - pasados;
+      var btn30 = document.querySelector('.chip-h[data-h="30"]');
+      if (btn30) { btn30.hidden = disp < 30; }
+      var h = Math.min(H, disp);
+      var vista = dias.slice(0, pasados + h), fut = dias.slice(pasados, pasados + h);
+      var reales = dias.filter(function (d) { return !d.u && d.r !== null; });
+      var prom = function (a, k) { return a.length ? a.reduce(function (s, d) { return s + d[k]; }, 0) / a.length : 0; };
+      var promRec = prom(reales, 'r'), promFut = prom(fut, 'a'), cambio = promRec > 0 ? (promFut / promRec - 1) * 100 : null;
+      var semana = it.pendiente * 7, sdFin = fut.length ? fut[fut.length - 1].sd : it.s;
+      var ult = reales.length ? fecha(reales[reales.length - 1].f) : null;
+      var txt = 'La tendencia es <strong>' + (semana >= 0 ? 'de crecimiento' : 'a la baja') + '</strong>: ' + (semana >= 0 ? '+' : '−') + fmt(Math.abs(semana), g) + ' por semana. ';
+      txt += h >= 30 ? 'En los próximos 30 días se esperan <strong>' + fmt(promFut * 30, g) + ' en total</strong> (' + fmt(promFut, g) + ' por día)'
+                     : 'En los próximos ' + h + ' días se esperan en promedio <strong>' + fmt(promFut, g) + ' por día</strong>';
+      if (cambio !== null) { txt += ', ' + (Math.abs(cambio) < 1 ? 'casi igual' : Math.round(Math.abs(cambio)) + '\u00a0% ' + (cambio > 0 ? 'más' : 'menos')) + ' que el promedio de los últimos 28 días con ventas (' + fmt(promRec, g) + ' por día)'; }
+      txt += '. Cada día puede desviarse unos ±' + fmt(sdFin, g) + '. ';
+      if (h >= 30) { txt += '<span class="sec">Cuanto más lejos, menos seguro: el cálculo solo conoce los últimos 6 meses y no incluye fiestas, temporadas ni cambios de precio.</span> '; }
+      if (ult) { txt += '<span class="sec">Última venta registrada: ' + ult + '.</span>'; }
+      var filas = fut.map(function (d) {
+        return '<tr><td>' + dia(d.f) + ' ' + fecha(d.f) + '</td><td class="num"><strong>' + fmt(d.a, g) + '</strong></td><td class="num sec">' +
+               fmt(Math.max(0, d.a - d.sd), g) + ' a ' + fmt(d.a + d.sd, g) + '</td></tr>';
+      }).join('');
+      var sub = it.tipo === 'insumo' ? 'gramos por día' + (it.platos.length ? ' · se calcula con: ' + esc(it.platos.join(', ')) : '') : 'porciones por día';
+      cont.innerHTML = '<h3 class="sub-g">' + esc(it.nombre) + ' <span class="sec" style="font-size:.9rem">· ' + sub + '</span></h3>' +
+        svg(it, vista) + '<p class="lectura">' + txt + '</p>' +
+        '<details class="tec"><summary>Ver el pronóstico día por día</summary><table class="menu"><tr><th>Día</th><th class="num">Esperado</th><th class="num">Rango probable</th></tr>' + filas + '</table></details>';
+    }
+
+    sel.addEventListener('change', dibujar);
+    document.querySelectorAll('.chip-h').forEach(function (b) {
+      b.addEventListener('click', function () {
+        H = +b.getAttribute('data-h');
+        document.querySelectorAll('.chip-h').forEach(function (x) { x.classList.toggle('on', x === b); });
+        dibujar();
+      });
+    });
+    dibujar();
+  })();
+</script>
 </main>
 <?php if (is_file(__DIR__ . '/chat_widget.php')) { require __DIR__ . '/chat_widget.php'; } ?>
 </body>
